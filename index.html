@@ -56,7 +56,6 @@
                 return () => clearInterval(load);
             }, []);
 
-            // --- 核心修正：優化 Vercel API 呼叫與解析邏輯 ---
             const handleImageUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -68,7 +67,6 @@
                     try {
                         const base64Data = reader.result.split(',')[1];
                         
-                        // 呼叫 Vercel 後端 API
                         const response = await fetch('/api/gemini', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -77,22 +75,22 @@
 
                         const result = await response.json();
                         
-                        // 如果後端回傳 error 欄位
+                        // 修正：針對物件型態的錯誤訊息進行字串轉換，避免顯示 [object Object]
                         if (result.error) {
-                            alert("辨識失敗: " + (typeof result.error === 'object' ? JSON.stringify(result.error) : result.error));
+                            const errorMsg = typeof result.error === 'object' ? JSON.stringify(result.error) : result.error;
+                            alert("辨識失敗: " + errorMsg);
                             setIsAiProcessing(false);
                             return;
                         }
 
-                        // 解析 Gemini 1.5 Flash 回傳的內容
                         let aiOutput = "";
                         if (result.candidates && result.candidates[0]?.content?.parts[0]?.text) {
                             aiOutput = result.candidates[0].content.parts[0].text.trim();
                         } else {
-                            throw new Error("AI 未能辨識內容或格式錯誤");
+                            throw new Error("AI 未能回傳有效內容，請重新嘗試。");
                         }
 
-                        // 提取 JSON 區塊
+                        // 使用正則表達式精準提取 JSON 陣列區塊
                         const jsonMatch = aiOutput.match(/\[[\s\S]*\]/);
                         if (jsonMatch) {
                             const parsedData = JSON.parse(jsonMatch[0]);
@@ -106,10 +104,10 @@
                                 setShowImportModal(false);
                             }
                         } else {
-                            alert("無法從辨識結果中提取數據，請確保截圖包含完整的建議書表格");
+                            alert("無法從辨識結果中解析數據，請確保截圖內容清晰。");
                         }
                     } catch (err) {
-                        alert("解析過程出錯: " + err.message);
+                        alert("處理過程出錯: " + err.message);
                     } finally { setIsAiProcessing(false); }
                 };
             };
