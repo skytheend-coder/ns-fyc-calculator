@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -16,6 +17,7 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        .glass-card { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -43,7 +45,7 @@
             const [age, setAge] = useState('32');
             const [rows, setRows] = useState([{ id: generateId(), code: '', term: '', premium: '' }]);
             const [showImportModal, setShowImportModal] = useState(false);
-            const [importText, setImportText] = useState('');
+            const [showLibrary, setShowLibrary] = useState(false);
             const [isAiProcessing, setIsAiProcessing] = useState(false);
 
             useEffect(() => {
@@ -56,191 +58,219 @@
                 return () => clearInterval(load);
             }, []);
 
-            const handleImageUpload = async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                setIsAiProcessing(true);
-                
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = async () => {
-                    try {
-                        const base64Data = reader.result.split(',')[1];
-                        
-                        const response = await fetch('/api/gemini', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ imageData: base64Data })
-                        });
-
-                        const result = await response.json();
-                        
-                        // 修正：針對物件型態的錯誤訊息進行字串轉換，避免顯示 [object Object]
-                        if (result.error) {
-                            const errorMsg = typeof result.error === 'object' ? JSON.stringify(result.error) : result.error;
-                            alert("辨識失敗: " + errorMsg);
-                            setIsAiProcessing(false);
-                            return;
-                        }
-
-                        let aiOutput = "";
-                        if (result.candidates && result.candidates[0]?.content?.parts[0]?.text) {
-                            aiOutput = result.candidates[0].content.parts[0].text.trim();
-                        } else {
-                            throw new Error("AI 未能回傳有效內容，請重新嘗試。");
-                        }
-
-                        // 使用正則表達式精準提取 JSON 陣列區塊
-                        const jsonMatch = aiOutput.match(/\[[\s\S]*\]/);
-                        if (jsonMatch) {
-                            const parsedData = JSON.parse(jsonMatch[0]);
-                            if (Array.isArray(parsedData)) {
-                                setRows(parsedData.map(item => ({
-                                    id: generateId(),
-                                    code: String(item.code || '').toUpperCase().trim(),
-                                    term: String(item.term || ''),
-                                    premium: String(item.premium || '').replace(/,/g, '')
-                                })));
-                                setShowImportModal(false);
-                            }
-                        } else {
-                            alert("無法從辨識結果中解析數據，請確保截圖內容清晰。");
-                        }
-                    } catch (err) {
-                        alert("處理過程出錯: " + err.message);
-                    } finally { setIsAiProcessing(false); }
-                };
-            };
-
-            const handleTextImport = () => {
-                const normalized = importText.replace(/,/g, '').replace(/（/g, '(').replace(/）/g, ')');
-                const lines = normalized.split('\n');
-                const tempRows = [];
-                const sortedCodes = [...new Set(db.map(p => p.code))].sort((a, b) => b.length - a.length);
-
-                lines.forEach((line, idx) => {
-                    const upperLine = line.toUpperCase();
-                    const foundCode = sortedCodes.find(c => upperLine.includes(c));
-                    if (foundCode) {
-                        let term = (upperLine.match(/(?:^|\D)(\d{1,2})(?:$|\D)/) || [])[1] || "";
-                        let searchArea = lines.slice(idx, idx + 8).join('\n');
-                        const cleanArea = searchArea.replace(/\d+[,]?\d*\s*(?:元|萬元|計劃|份|單位|1單|2單)/g, '');
-                        const nums = (cleanArea.match(/\d+/g) || []).map(Number);
-                        let premium = "";
-                        for (let i = 0; i < nums.length - 1; i++) {
-                            if (nums[i] > 500 && nums[i] === nums[i+1]) { premium = nums[i].toString(); break; }
-                        }
-                        if (!premium) premium = nums.find(n => n > 500) || "";
-                        if (premium) tempRows.push({ id: generateId(), code: foundCode, term: String(term), premium: String(premium) });
-                    }
-                });
-                if (tempRows.length > 0) { setRows(tempRows); setShowImportModal(false); setImportText(''); }
-                else alert("文字辨識失敗");
-            };
-
+            // 核心邏輯：智慧拆解代碼 (處理 20STCB vs HCAR2)
             const calculateRowResult = (row) => {
-                const inputCode = (row.code || '').trim().toUpperCase();
-                if (!inputCode) return { valid: false, availableTerms: [] };
-                let matched = db.filter(r => r.code === inputCode || (r.alias && r.alias.includes(inputCode)));
+                let input = (row.code || '').trim().toUpperCase();
+                if (!input) return { valid: false, availableTerms: [] };
+
+                let cleanCode = input;
+                let detectedTerm = row.term;
+
+                // 智慧拆解：只剝離開頭的年期數字 (6, 10, 15, 20, 30)
+                const prefixMatch = input.match(/^(6|10|15|20|30)([A-Z]+.*)$/);
+                if (prefixMatch) {
+                    detectedTerm = detectedTerm || prefixMatch[1]; 
+                    cleanCode = prefixMatch[2];
+                }
+
+                let matched = db.filter(r => r.code === cleanCode || (r.alias && r.alias.includes(cleanCode)));
+                if (matched.length === 0) {
+                    matched = db.filter(r => r.code === input || (r.alias && r.alias.includes(input)));
+                    cleanCode = input;
+                }
+
                 const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => parseInt(a) - parseInt(b));
-                const rate = matched.find(r => String(r.term) === String(row.term) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
-                if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code };
+                const finalTerm = detectedTerm || row.term;
+                const rate = matched.find(r => String(r.term) === String(finalTerm) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
+
+                if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code, cleanCode };
+
                 const p = parseFloat(row.premium) || 0;
                 const fyc = p * (rate.fycRate / 100);
-                const weight = (function(c, t){
+                const marketing = p * (rate.marketingRate / 100);
+                const bonus = fyc * 0.1;
+                const weight = (function(cat, t){
                     const tv = parseInt(t);
-                    if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(c)) return (tv === 2) ? 0.6 : 3.0;
-                    if (['LIFE', 'FIXED', 'INVEST'].includes(c)) {
+                    if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(cat)) return (tv === 2) ? 0.6 : 3.0;
+                    if (['LIFE', 'FIXED', 'INVEST'].includes(cat)) {
                         if (tv === 1) return 0.05; if (tv === 2) return 0.2; if (tv === 3) return 0.3;
                         if (tv === 6) return 1.0; if (tv >= 10 && tv < 20) return 2.0; if (tv >= 20) return 3.0;
                     }
                     return 1.0;
                 })(rate.cat, rate.term);
-                return { valid: true, fyc, total: fyc + (p * (rate.marketingRate/100)) + (fyc * 0.1), weightedValue: p * weight, matchedCode: rate.code, availableTerms };
+
+                return { 
+                    valid: true, fyc, marketing, bonus, total: fyc + marketing + bonus, 
+                    weightedValue: p * weight, matchedCode: rate.code, availableTerms,
+                    roi: p > 0 ? ((fyc + marketing + bonus) / p * 100).toFixed(1) : 0,
+                    cat: rate.cat
+                };
             };
 
             const totals = useMemo(() => rows.reduce((acc, r) => {
                 const res = calculateRowResult(r);
-                return { total: acc.total + (res.valid ? res.total : 0), premium: acc.premium + (parseFloat(r.premium) || 0), v: acc.v + (res.valid ? res.weightedValue : 0) };
-            }, { total: 0, premium: 0, v: 0 }), [rows, age, db]);
+                return { 
+                    total: acc.total + (res.valid ? res.total : 0), 
+                    premium: acc.premium + (parseFloat(r.premium) || 0), 
+                    v: acc.v + (res.valid ? res.weightedValue : 0),
+                    fyc: acc.fyc + (res.valid ? res.fyc : 0)
+                };
+            }, { total: 0, premium: 0, v: 0, fyc: 0 }), [rows, age, db]);
+
+            const handleImageUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setIsAiProcessing(true);
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    try {
+                        const response = await fetch('/api/gemini', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ imageData: reader.result.split(',')[1] })
+                        });
+                        const result = await response.json();
+                        const jsonMatch = (result.candidates?.[0]?.content?.parts?.[0]?.text || "").match(/\[[\s\S]*\]/);
+                        if (jsonMatch) {
+                            setRows(JSON.parse(jsonMatch[0]).map(item => ({
+                                id: generateId(),
+                                code: String(item.code || '').toUpperCase().trim(),
+                                term: String(item.term || ''),
+                                premium: String(item.premium || '').replace(/,/g, '')
+                            })));
+                            setShowImportModal(false);
+                        }
+                    } catch (err) { alert("辨識失敗"); } finally { setIsAiProcessing(false); }
+                };
+            };
 
             return (
-                <div className="min-h-screen bg-slate-50 p-4 md:p-8 flex flex-col font-medium text-slate-800">
-                    <div className="max-w-7xl mx-auto w-full flex-grow">
-                        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+                <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-medium text-slate-800">
+                    <div className="max-w-6xl mx-auto space-y-8">
+                        {/* Header */}
+                        <div className="flex flex-col md:flex-row justify-between items-center gap-6">
                             <div className="flex items-center gap-4">
-                                <div className="bg-indigo-600 p-4 rounded-3xl shadow-xl text-white"><Icon name="Calculator" size={32} /></div>
-                                <div><h1 className="text-3xl font-black tracking-tight">業績計算機</h1><p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-1">前豐小工具</p></div>
+                                <div className="bg-indigo-600 p-4 rounded-3xl shadow-lg text-white"><Icon name="Zap" size={32} /></div>
+                                <div><h1 className="text-3xl font-black">智慧業績計算機</h1><p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">南山前豐專屬 v3.0</p></div>
                             </div>
-                            <div className="bg-white px-8 py-4 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
-                                <p className="text-[10px] font-bold text-slate-300 uppercase">客戶年齡</p>
-                                <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-12 text-3xl font-black text-indigo-600 text-center outline-none bg-transparent" />
+                            <div className="flex gap-4">
+                                <div className="bg-white px-6 py-3 rounded-full shadow-sm border flex items-center gap-3">
+                                    <span className="text-[10px] font-bold text-slate-300 uppercase">被保人年齡</span>
+                                    <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-xl font-black text-indigo-600 bg-transparent outline-none" />
+                                </div>
+                                <button onClick={() => setShowLibrary(true)} className="p-3 bg-white rounded-full shadow-sm border hover:bg-slate-50 transition-all text-slate-400"><Icon name="BookOpen" /></button>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-                            <div className="xl:col-span-7 bg-white p-8 rounded-[2.5rem] shadow-sm space-y-6 border border-slate-100">
-                                <div className="flex justify-between items-center border-b pb-4">
-                                    <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800"><Icon name="ClipboardList" className="text-indigo-500" /> 建議書清單</h2>
-                                    <button onClick={() => setShowImportModal(true)} className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-full text-xs font-bold hover:bg-indigo-100 transition-all shadow-sm"><Icon name="FileText" size={14} /> 智慧導入</button>
-                                </div>
-                                <div className="space-y-4">
-                                    {rows.map(row => {
-                                        const res = calculateRowResult(row);
-                                        return (
-                                            <div key={row.id} className={`grid grid-cols-12 gap-3 items-center p-4 rounded-[2rem] border-2 transition-all ${res.valid ? 'bg-indigo-50/20 border-indigo-100 shadow-sm' : 'border-slate-100'}`}>
-                                                <div className="col-span-4 relative">
-                                                    <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value.toUpperCase()} : r))} className="w-full p-3 rounded-xl bg-slate-50 border-none font-bold uppercase shadow-inner text-sm outline-none" />
-                                                    {res.matchedCode && <span className="absolute -bottom-2 left-3 text-[9px] bg-white px-2 py-0.5 rounded-full border border-indigo-100 text-indigo-500 font-bold">{res.matchedCode}</span>}
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            {/* Main List */}
+                            <div className="lg:col-span-7 space-y-4">
+                                <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h2 className="font-bold flex items-center gap-2"><Icon name="LayoutList" className="text-indigo-500" /> 商品明細</h2>
+                                        <button onClick={() => setShowImportModal(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full hover:bg-indigo-100 transition-all">智慧導入</button>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {rows.map(row => {
+                                            const res = calculateRowResult(row);
+                                            return (
+                                                <div key={row.id} className={`p-4 rounded-[1.5rem] border-2 transition-all ${res.valid ? 'bg-indigo-50/30 border-indigo-100' : 'border-slate-100'}`}>
+                                                    <div className="grid grid-cols-12 gap-3 items-center">
+                                                        <div className="col-span-4 relative">
+                                                            <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value} : r))} className="w-full p-2 bg-white rounded-lg border-none shadow-inner font-bold text-sm outline-none uppercase" />
+                                                            {res.matchedCode && <span className="absolute -top-2 -left-1 text-[8px] bg-indigo-600 text-white px-2 py-0.5 rounded-full font-bold">{res.matchedCode}</span>}
+                                                        </div>
+                                                        <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2 bg-white rounded-lg border-none shadow-inner font-bold text-sm outline-none">
+                                                            <option value="">年期</option>
+                                                            {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
+                                                        </select>
+                                                        <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-2 bg-white rounded-lg border-none shadow-inner font-bold text-sm outline-none" />
+                                                        <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-400"><Icon name="Trash2" size={18} /></button>
+                                                    </div>
+                                                    {res.valid && (
+                                                        <div className="mt-3 flex justify-between items-center px-2">
+                                                            <div className="flex gap-3">
+                                                                <span className="text-[9px] bg-white px-2 py-1 rounded-md shadow-sm text-indigo-500 font-bold">FYC: ${Math.round(res.fyc)}</span>
+                                                                <span className="text-[9px] bg-white px-2 py-1 rounded-md shadow-sm text-emerald-500 font-bold">ROI: {res.roi}%</span>
+                                                            </div>
+                                                            <span className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">V: {Math.round(res.weightedValue)}</span>
+                                                        </div>
+                                                    )}
                                                 </div>
-                                                <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-3 rounded-xl bg-slate-50 border-none font-bold shadow-inner text-sm outline-none">
-                                                    <option value="">年期</option>
-                                                    {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
-                                                </select>
-                                                <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-3 rounded-xl bg-slate-50 border-none font-bold shadow-inner text-sm outline-none" />
-                                                <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-500 transition-colors"><Icon name="XCircle" size={20} /></button>
-                                            </div>
-                                        );
-                                    })}
-                                    <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-3xl text-slate-300 font-bold hover:border-indigo-200">+ 新增商品</button>
+                                            );
+                                        })}
+                                        <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-[1.5rem] text-slate-300 font-bold hover:border-indigo-200 transition-all">+ 新增險種</button>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="xl:col-span-5 text-center">
-                                <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl flex flex-col h-full justify-between border border-slate-800">
-                                    <div>
-                                        <p className="text-indigo-400 font-bold text-[10px] uppercase tracking-widest mb-3">總預估收益 (含10%獎勵)</p>
-                                        <div className="text-6xl font-black mb-1">${Math.round(totals.total).toLocaleString()}</div>
-                                        <p className="text-slate-400 text-[10px] font-bold opacity-80 mt-2">數字僅供參考</p>
-                                    </div>
-                                    <div className="mt-8 space-y-4">
-                                        <p className="text-slate-500 text-xs font-bold border-b border-slate-800 pb-4">建議書總保費: ${Math.round(totals.premium).toLocaleString()}</p>
-                                        <div className="flex justify-between px-4 font-bold items-center text-left">
-                                            <span className="text-slate-500 text-xs uppercase tracking-widest">加權業績 (V)</span>
-                                            <span className="text-2xl text-indigo-300">{Math.round(totals.v).toLocaleString()}</span>
+                            {/* Dashboard */}
+                            <div className="lg:col-span-5 space-y-6">
+                                <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl relative overflow-hidden border-4 border-white">
+                                    <div className="absolute top-0 right-0 p-8 opacity-10"><Icon name="Coins" size={120} /></div>
+                                    <div className="relative z-10">
+                                        <p className="text-indigo-400 font-bold text-[10px] uppercase tracking-widest mb-4">預估總收益 (含獎勵)</p>
+                                        <div className="text-6xl font-black mb-6">${Math.round(totals.total).toLocaleString()}</div>
+                                        <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
+                                            <div>
+                                                <p className="text-white/40 text-[9px] font-bold uppercase mb-1">純 FYC 收入</p>
+                                                <p className="text-xl font-bold text-indigo-200">${Math.round(totals.fyc).toLocaleString()}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-white/40 text-[9px] font-bold uppercase mb-1">加權業績 (V)</p>
+                                                <p className="text-xl font-bold text-emerald-300">{Math.round(totals.v).toLocaleString()}</p>
+                                            </div>
                                         </div>
                                     </div>
+                                </div>
+                                <div className="bg-white p-6 rounded-[2rem] shadow-sm border flex justify-between items-center px-8">
+                                    <span className="text-slate-400 text-xs font-bold uppercase">建議書總保費</span>
+                                    <span className="text-xl font-black text-slate-800">${Math.round(totals.premium).toLocaleString()}</span>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <footer className="mt-12 mb-6 text-center text-slate-400 text-[10px] font-bold tracking-widest uppercase">made by 理炎</footer>
 
-                    {showImportModal && (
+                    {/* Modals & Library ... */}
+                    {showLibrary && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl space-y-6">
-                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">智慧導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
-                                <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 text-center space-y-3">
-                                    <p className="text-xs font-bold text-indigo-700 flex items-center justify-center gap-2"><Icon name="Camera" size={14} /> 上傳截圖辨識 (Vercel 後端)</p>
-                                    <input type="file" accept="image/*" onChange={handleImageUpload} disabled={isAiProcessing} className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-600 file:text-white cursor-pointer shadow-sm hover:file:bg-indigo-700 transition-all" />
-                                    {isAiProcessing && <p className="mt-3 text-[10px] text-indigo-500 animate-pulse font-bold font-mono uppercase">正在透過中繼伺服器解析圖片...</p>}
+                            <div className="bg-white rounded-[2.5rem] w-full max-w-2xl p-8 max-h-[80vh] overflow-y-auto scrollbar-hide">
+                                <div className="flex justify-between items-center mb-8">
+                                    <h3 className="text-2xl font-black">商品費率庫</h3>
+                                    <button onClick={() => setShowLibrary(false)} className="text-slate-300"><Icon name="X" size={24} /></button>
                                 </div>
-                                <div className="relative"><div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-100"></span></div><div className="relative flex justify-center text-[10px] font-bold text-slate-300 uppercase"><span className="bg-white px-2">或手動貼上文字</span></div></div>
-                                <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-3xl p-4 outline-none text-xs resize-none focus:border-indigo-200 transition-all" placeholder="貼上文字內容..." value={importText} onChange={e => setImportText(e.target.value)} />
-                                <div className="flex gap-4"><button onClick={() => setShowImportModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-400 hover:bg-slate-200 transition-all">取消</button><button onClick={handleTextImport} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg hover:bg-indigo-700 transition-all active:scale-95">開始文字辨識</button></div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {db.map((item, idx) => (
+                                        <div key={idx} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center">
+                                            <div>
+                                                <p className="font-bold text-indigo-600">{item.code} <span className="text-[10px] text-slate-400">({item.term}Y)</span></p>
+                                                <p className="text-[10px] text-slate-400 font-bold">FYC: {item.fycRate}% | Cat: {item.cat}</p>
+                                            </div>
+                                            <a href={item.dmUrl} target="_blank" className="text-indigo-400 hover:text-indigo-600"><Icon name="ExternalLink" size={14} /></a>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     )}
+
+                    {showImportModal && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[3rem] w-full max-w-md p-8 shadow-2xl space-y-6">
+                                <h3 className="text-2xl font-black text-center">智慧導入建議書</h3>
+                                <div className="bg-indigo-50 border-2 border-dashed border-indigo-200 p-8 rounded-[2rem] text-center space-y-4">
+                                    <div className="bg-white w-16 h-16 rounded-3xl shadow-sm flex items-center justify-center mx-auto text-indigo-600"><Icon name="Camera" size={32} /></div>
+                                    <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest">上傳建議書截圖</p>
+                                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="ai-upload" />
+                                    <label htmlFor="ai-upload" className="inline-block bg-indigo-600 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:bg-indigo-700 cursor-pointer transition-all active:scale-95">選擇檔案</label>
+                                    {isAiProcessing && <div className="animate-pulse text-[10px] text-indigo-500 font-bold uppercase">AI 正在分析表格數據...</div>}
+                                </div>
+                                <button onClick={() => setShowImportModal(false)} className="w-full py-4 text-slate-400 font-bold text-xs uppercase tracking-widest">取消</button>
+                            </div>
+                        </div>
+                    )}
+                    <footer className="mt-12 text-center text-slate-300 text-[10px] font-bold tracking-widest uppercase">made by 理炎</footer>
                 </div>
             );
         };
