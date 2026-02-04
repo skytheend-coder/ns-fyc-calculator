@@ -1,4 +1,4 @@
-// api/gemini.js - 自動模型偵測畢業版
+// api/gemini.js - 最終穩定對接版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -10,9 +10,8 @@ export default async function handler(req, res) {
   const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
-    // 步驟 1: 先嘗試最標準的 v1beta 路徑
-    const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
-    const url = `${baseUrl}?key=${API_KEY}`;
+    // 核心修正：這是 Google 官方認可最穩定的 v1beta 呼叫路徑
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
     
     const response = await fetch(url, {
       method: 'POST',
@@ -29,27 +28,13 @@ export default async function handler(req, res) {
 
     const data = await response.json();
     
-    // 步驟 2: 如果 v1beta 噴錯找不到模型，自動嘗試切換到 v1
-    if (data.error && data.error.message.includes("not found")) {
-      const fallbackUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
-      const retryResponse = await fetch(fallbackUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: "提取建議書數據 JSON 陣列。" },
-              { inline_data: { mime_type: "image/jpeg", data: imageData } }
-            ]
-          }]
-        })
-      });
-      const retryData = await retryResponse.json();
-      return res.status(200).json(retryData);
+    // 如果報錯，我們會直接透傳錯誤，方便排查
+    if (data.error) {
+      return res.status(200).json({ error: data.error.message });
     }
 
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "後端通訊最終防線崩潰: " + error.message });
+    res.status(200).json({ error: "伺服器通訊異常: " + error.message });
   }
 }
