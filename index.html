@@ -1,46 +1,197 @@
-// --- index.html 核心計算邏輯修正 ---
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>業績計算機 - 前豐小工具</title>
+    <script>document.write('<script src="rates.js?v=' + Date.now() + '"><\/script>');</script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+        const Icon = ({ name, size = 16, className = "" }) => {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (window.lucide && ref.current) {
+                    const iconName = name.replace(/([A-Z])/g, "-$1").toLowerCase().replace(/^-/, "");
+                    ref.current.innerHTML = `<i data-lucide="${iconName}"></i>`;
+                    window.lucide.createIcons({ nameAttr: 'data-lucide', root: ref.current });
+                }
+            }, [name, size]);
+            return <span ref={ref} className={`inline-block align-middle ${className}`} style={{ width: size, height: size }}></span>;
+        };
 
-const calculateRowResult = (row) => {
-    let input = (row.code || '').trim().toUpperCase();
-    if (!input) return { valid: false, availableTerms: [] };
-    
-    // 💡 修正 1：更寬鬆且精準的代碼提取
-    // 先嘗試提取末尾英數，若失敗則維持原樣，確保手打 STCB 也能通
-    const cleanCode = input.match(/[A-Z0-9]+$/)?.[0] || input;
-    
-    // 💡 修正 2：優先匹配完全一致的 code 或 alias
-    let matched = db.filter(r => r.code === cleanCode || (r.alias && r.alias.includes(cleanCode)));
-    
-    // 如果還是找不到，才試著找「包含」該代碼的項目 (例如輸入 STC 找 STCB)
-    if (matched.length === 0) {
-        matched = db.filter(r => r.code.includes(cleanCode));
-    }
+        const App = () => {
+            const [db, setDb] = useState([]);
+            const [age, setAge] = useState('32');
+            const [rows, setRows] = useState([{ id: Math.random(), code: '', term: '', premium: '' }]);
+            const [showImportModal, setShowImportModal] = useState(false);
+            const [importText, setImportText] = useState('');
+            const [isAiProcessing, setIsAiProcessing] = useState(false);
 
-    const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => parseInt(a) - parseInt(b));
-    
-    // 💡 修正 3：年期匹配邏輯
-    const rate = matched.find(r => String(r.term) === String(row.term) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
+            useEffect(() => {
+                const checkData = setInterval(() => {
+                    if (window.PRODUCT_RATES) { setDb(window.PRODUCT_RATES); clearInterval(checkData); }
+                }, 200);
+            }, []);
 
-    if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code || cleanCode };
+            const calculateRow = (row) => {
+                const code = (row.code || '').trim().toUpperCase();
+                const p = parseFloat(row.premium) || 0;
+                if (!code) return { valid: false };
+                let matched = db.filter(r => r.code === code || (r.alias && r.alias.includes(code)));
+                const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => a - b);
+                const rate = matched.find(r => String(r.term) === String(row.term) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
+                if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code };
+                const fyc = p * (rate.fycRate / 100);
+                const weight = (function(cat, t){
+                    const tv = parseInt(t);
+                    if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(cat)) return (tv === 2) ? 0.6 : 3.0;
+                    if (['LIFE', 'FIXED', 'INVEST'].includes(cat)) {
+                        if (tv === 1) return 0.05; if (tv === 2) return 0.2; if (tv === 3) return 0.3;
+                        if (tv === 6) return 1.0; if (tv >= 10 && tv < 20) return 2.0; if (tv >= 20) return 3.0;
+                    }
+                    return 1.0;
+                })(rate.cat, rate.term);
+                return { valid: true, fyc, marketing: p * (rate.marketingRate / 100), bonus: fyc * 0.1, v: p * weight, availableTerms };
+            };
 
-    const p = parseFloat(row.premium) || 0;
-    const fyc = p * (rate.fycRate / 100);
-    const marketing = p * (rate.marketingRate / 100);
-    const bonus = fyc * 0.1;
-    
-    const weight = (function(cat, t){
-        const tv = parseInt(t);
-        if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(cat)) return (tv === 2) ? 0.6 : 3.0;
-        if (['LIFE', 'FIXED', 'INVEST'].includes(cat)) {
-            if (tv === 1) return 0.05; if (tv === 2) return 0.2; if (tv === 3) return 0.3;
-            if (tv === 6) return 1.0; if (tv >= 10 && tv < 20) return 2.0; if (tv >= 20) return 3.0;
-        }
-        return 1.0;
-    })(rate.cat, rate.term);
+            const totals = useMemo(() => rows.reduce((acc, r) => {
+                const res = calculateRow(r);
+                return res.valid ? { total: acc.total + res.fyc + res.marketing + res.bonus, v: acc.v + res.v, p: acc.p + (parseFloat(r.premium) || 0) } : acc;
+            }, { total: 0, v: 0, p: 0 }), [rows, age, db]);
 
-    return { 
-        valid: true, fyc, marketing, bonus, 
-        total: fyc + marketing + bonus, 
-        weightedValue: p * weight 
-    };
-};
+            const handleImageUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setIsAiProcessing(true);
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    try {
+                        const response = await fetch('/api/gemini', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ imageData: reader.result.split(',')[1] })
+                        });
+                        const data = await response.json();
+                        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                        const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+                        if (jsonMatch) {
+                            setRows(JSON.parse(jsonMatch[0]).map(i => ({ id: Math.random(), code: String(i.code).toUpperCase(), term: String(i.term), premium: String(i.premium).replace(/[^0-9]/g, '') })));
+                            setShowImportModal(false);
+                        }
+                    } catch (err) { alert("辨識讀入失敗"); } finally { setIsAiProcessing(false); }
+                };
+            };
+
+            const handleTextImport = () => {
+                const newRows = importText.split('\n').map(line => {
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length >= 3) return { id: Math.random(), code: parts[0].toUpperCase(), term: parts[1].replace(/[^0-9]/g, ''), premium: parts[parts.length-1].replace(/[^0-9]/g, '') };
+                    return null;
+                }).filter(r => r);
+                if (newRows.length) { setRows(newRows); setShowImportModal(false); setImportText(''); }
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+                    <div className="max-w-6xl mx-auto space-y-8">
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-4">
+                                <div className="bg-indigo-600 p-4 rounded-3xl text-white shadow-lg"><Icon name="Zap" size={32} /></div>
+                                <h1 className="text-3xl font-black">業績計算機</h1>
+                            </div>
+                            <div className="bg-white px-6 py-3 rounded-full shadow-sm border flex items-center gap-3">
+                                <span className="text-[10px] font-bold text-slate-300">年齡</span>
+                                <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-xl font-black text-indigo-600 bg-transparent outline-none" />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            <div className="lg:col-span-7 bg-white p-6 rounded-[2.5rem] shadow-sm border">
+                                <div className="flex justify-between mb-6">
+                                    <h2 className="font-bold text-slate-700">商品清單</h2>
+                                    <button onClick={() => setShowImportModal(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full">智慧導入</button>
+                                </div>
+                                <div className="space-y-4">
+                                    {rows.map(row => {
+                                        const res = calculateRow(row);
+                                        return (
+                                            <div key={row.id} className={`p-4 rounded-3xl border-2 ${res.valid ? 'bg-indigo-50/20 border-indigo-100' : 'border-slate-100'}`}>
+                                                <div className="grid grid-cols-12 gap-3">
+                                                    <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value} : r))} className="col-span-4 p-2 bg-white rounded-xl shadow-inner uppercase font-bold text-sm" />
+                                                    <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2 bg-white rounded-xl shadow-inner font-bold text-sm">
+                                                        <option value="">年期</option>
+                                                        {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
+                                                    </select>
+                                                    <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-2 bg-white rounded-xl shadow-inner font-bold text-sm" />
+                                                    <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200"><Icon name="Trash2" /></button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    <button onClick={() => setRows([...rows, {id: Math.random(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-3xl text-slate-300 font-bold">+ 新增</button>
+                                </div>
+                            </div>
+                            <div className="lg:col-span-5 bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl">
+                                <p className="text-indigo-400 text-xs font-bold uppercase tracking-widest mb-4">預估收益</p>
+                                <div className="text-7xl font-black mb-8">${Math.round(totals.total).toLocaleString()}</div>
+                                <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-8">
+                                    <div><p className="text-white/40 text-[9px]">加權業績 (V)</p><p className="text-2xl font-black text-emerald-300">{Math.round(totals.v).toLocaleString()}</p></div>
+                                    <div><p className="text-white/40 text-[9px]">總保費</p><p className="text-2xl font-black text-indigo-200">${Math.round(totals.p).toLocaleString()}</p></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 商品庫區 */}
+                        <div className="bg-white p-8 rounded-[3rem] shadow-sm border text-sm">
+                            <h3 className="font-black mb-6">商品資料庫</h3>
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                                {[...new Set(db.map(p => p.code))].map(code => (
+                                    <div key={code} className="p-2 bg-slate-50 rounded-xl flex justify-between items-center text-[10px] font-bold">
+                                        <span>{code}</span>
+                                        <a href={db.find(p => p.code === code)?.dmUrl} target="_blank"><Icon name="ExternalLink" size={12} className="text-slate-300" /></a>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {showImportModal && (
+                        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4 text-center leading-normal">
+                            <div className="bg-white rounded-[3rem] w-full max-w-lg p-10 shadow-2xl space-y-8">
+                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">建議書導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300"><Icon name="X" size={24} /></button></div>
+                                <div className="space-y-6">
+                                    <div className="bg-indigo-50 border-4 border-dashed border-indigo-100 p-8 rounded-[2.5rem]">
+                                        <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="ai-up" />
+                                        <label htmlFor="ai-up" className="block w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl cursor-pointer">
+                                            {isAiProcessing ? '辨識載入中...' : '📷 上傳建議書截圖'}
+                                        </label>
+                                    </div>
+                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs outline-none" placeholder="或貼上文字..." value={importText} onChange={e => setImportText(e.target.value)} />
+                                    <button onClick={handleTextImport} className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl font-bold text-slate-500">確認導入</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <footer className="mt-8 text-center text-slate-300 text-[10px] font-bold">made by 理炎</footer>
+                </div>
+            );
+        };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

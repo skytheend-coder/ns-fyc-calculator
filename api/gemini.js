@@ -1,4 +1,4 @@
-// api/gemini.js - 南山建議書表格「防呆」優化版
+// api/gemini.js - 核心辨識引擎 (去中文、防錯位優化版)
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -9,6 +9,7 @@ export default async function handler(req, res) {
   const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
+    // 自動尋找目前最穩定的模型
     const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`;
     const listRes = await fetch(listUrl);
     const listData = await listRes.json();
@@ -26,32 +27,26 @@ export default async function handler(req, res) {
         contents: [{
           parts: [
             { text: `
-              任務：將南山人壽建議書表格精準轉為 JSON 陣列。
+              你現在是南山人壽建議書專家。請將截圖中的表格轉換為 JSON。
               
               【嚴格抓取規則】
-              1. code (代碼)：請忽略險種名稱中的中文，只提取末尾的英數組合。
-                 - 例如：『南山人壽溢心守護2醫療保險 30HPHI2』提取『HPHI2』。
-                 - 例如：『南山人壽意外骨折及特定手術... SBBR』提取『SBBR』。
-                 - ⚠️ 絕不可提取『本人』、『1單位』、『36萬元』作為代碼。
+              1. code (代碼)：
+                 - 請忽略所有中文，只擷取險種名稱最後面的英數代碼。
+                 - 範例：『30HPHI2 溢心守護』應擷取為 『HPHI2』。
+                 - 範例：『20STCB 終身健康』應擷取為 『STCB』。
+                 - 範例：『SBBR 骨折手術』應擷取為 『SBBR』。
+              2. term (年期)：擷取『繳費年期』欄位數字。範例：30, 20, 1。
+              3. premium (保費)：擷取『折扣後保費』欄位數字，移除逗號。
               
-              2. term (年期)：
-                 - 請看『繳費年期』欄位。
-                 - 僅提取純數字。例如 30, 20, 1。
-              
-              3. premium (保費)：
-                 - 請看『折扣後保費』欄位。
-                 - ⚠️ 這是圖片中最右側的金額數字。
-                 - 僅提取純數字，移除逗號。例如 12916, 17352, 5220。
-              
-              【輸出格式】僅回傳純 JSON 陣列，不准有任何 Markdown 標籤或文字。
-              範例：[{"code":"HPHI2","term":"30","premium":12916}]
+              【禁止行為】嚴禁擷取『本人』、『計劃』或中文名稱作為代碼。
+              【格式要求】僅回傳純 JSON 陣列，例如: [{"code":"HPHI2","term":"30","premium":12916}]
             `},
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
         }],
         generationConfig: { 
           response_mime_type: "application/json",
-          temperature: 0.1 // 強制嚴謹模式，減少亂猜
+          temperature: 0.1 
         }
       })
     });
@@ -59,6 +54,6 @@ export default async function handler(req, res) {
     const data = await response.json();
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "辨識引擎邏輯深度校準中" });
+    res.status(200).json({ error: "辨識中斷，請重試" });
   }
 }
