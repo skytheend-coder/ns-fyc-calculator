@@ -1,4 +1,4 @@
-// api/gemini.js - 南山主約年期強化版
+// api/gemini.js - 南山建議書表格專用版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -25,17 +25,29 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: "你現在是保險建議書解析專家。請從圖片提取表格數據。特別注意：1. 險種代碼(如 20STCB)。 2. 年期：若代碼開頭有數字(如20)，則年期為該數字；若無，請找繳費期間欄位的數字。 3. 實繳保費。僅回傳 JSON 陣列：[{\"code\":\"20STCB\",\"term\":\"20\",\"premium\":5220}]。" },
+            { text: `
+              你現在是南山人壽建議書解析專家。
+              請掃描圖片中的【規劃險種內容】表格，每一列都要提取：
+              1. code (險種代碼)：提取險種名稱末端的代碼，例如 30HPH12, 30FLTC, 20STCB, SBBR, PAMR, DHI, 1HIR, 1TED, HCAR2, 1HS。
+              2. term (年期)：精準提取【繳費年期】欄位的數字。例如主約填 30 或 20，附約通常填 1。
+              3. premium (保費)：提取【折扣後保費】欄位的數字。例如 12916, 5220, 2200。
+              
+              僅回傳 JSON 陣列，嚴格禁止其他文字：
+              [{"code":"30HPH12","term":"30","premium":12916},{"code":"SBBR","term":"1","premium":2200}]
+            `},
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
         }],
-        generationConfig: { response_mime_type: "application/json" }
+        generationConfig: { 
+          response_mime_type: "application/json",
+          temperature: 0.1 
+        }
       })
     });
 
     const data = await response.json();
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "解析微調失敗" });
+    res.status(200).json({ error: "解析邏輯優化中" });
   }
 }
