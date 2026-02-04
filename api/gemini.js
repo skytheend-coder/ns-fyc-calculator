@@ -8,7 +8,7 @@ export default async function handler(req, res) {
   
   const { imageData } = req.body;
   // 請確保這裡貼的是你最新產生的金鑰
-  const API_KEY = "你的金鑰貼在這裡"; 
+  const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   // 使用 Google 官方最標準的 v1beta 路徑
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
