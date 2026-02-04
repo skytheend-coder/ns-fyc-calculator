@@ -1,4 +1,4 @@
-// api/gemini.js - 最終標準相容版
+// api/gemini.js - 自動模型偵測畢業版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -10,8 +10,9 @@ export default async function handler(req, res) {
   const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
-    // 回歸最穩定的 v1beta 路徑
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+    // 步驟 1: 先嘗試最標準的 v1beta 路徑
+    const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+    const url = `${baseUrl}?key=${API_KEY}`;
     
     const response = await fetch(url, {
       method: 'POST',
@@ -22,22 +23,33 @@ export default async function handler(req, res) {
             { text: "這是南山人壽建議書。請提取險種代碼(如 20STCB)、年期、實繳保費。僅回傳 JSON 陣列，例如: [{\"code\": \"20STCB\", \"term\": \"20\", \"premium\": 5220}]。" },
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
-        }],
-        // 修正：在 v1beta 中，直接使用 response_mime_type 是正確的，但格式要包在 generationConfig 內
-        generationConfig: {
-          response_mime_type: "application/json"
-        }
+        }]
       })
     });
 
     const data = await response.json();
     
-    if (data.error) {
-      return res.status(200).json({ error: `Google API 報錯: ${data.error.message}` });
+    // 步驟 2: 如果 v1beta 噴錯找不到模型，自動嘗試切換到 v1
+    if (data.error && data.error.message.includes("not found")) {
+      const fallbackUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+      const retryResponse = await fetch(fallbackUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: "提取建議書數據 JSON 陣列。" },
+              { inline_data: { mime_type: "image/jpeg", data: imageData } }
+            ]
+          }]
+        })
+      });
+      const retryData = await retryResponse.json();
+      return res.status(200).json(retryData);
     }
 
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "後端通訊異常: " + error.message });
+    res.status(200).json({ error: "後端通訊最終防線崩潰: " + error.message });
   }
 }
