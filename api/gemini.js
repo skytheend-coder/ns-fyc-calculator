@@ -1,4 +1,4 @@
-// api/gemini.js - 核心辨識引擎 (去中文、防錯位優化版)
+// api/gemini.js - 核心辨識引擎 (去中文、嚴格格式化版)
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -9,7 +9,6 @@ export default async function handler(req, res) {
   const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
-    // 自動尋找目前最穩定的模型
     const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`;
     const listRes = await fetch(listUrl);
     const listData = await listRes.json();
@@ -27,19 +26,17 @@ export default async function handler(req, res) {
         contents: [{
           parts: [
             { text: `
-              你現在是南山人壽建議書專家。請將截圖中的表格轉換為 JSON。
+              任務：將南山人壽建議書表格轉為 JSON 陣列。
               
               【嚴格抓取規則】
               1. code (代碼)：
-                 - 請忽略所有中文，只擷取險種名稱最後面的英數代碼。
-                 - 範例：『30HPHI2 溢心守護』應擷取為 『HPHI2』。
-                 - 範例：『20STCB 終身健康』應擷取為 『STCB』。
-                 - 範例：『SBBR 骨折手術』應擷取為 『SBBR』。
-              2. term (年期)：擷取『繳費年期』欄位數字。範例：30, 20, 1。
-              3. premium (保費)：擷取『折扣後保費』欄位數字，移除逗號。
+                 - 請徹底忽略險種名稱中的中文。
+                 - 僅擷取險種名稱最後端的英數組合。例如『30HPHI2』擷取為『HPHI2』，『SBBR』擷取為『SBBR』。
+              2. term (年期)：擷取『繳費年期』欄位的純數字。
+              3. premium (保費)：擷取『折扣後保費』欄位數字，並移除逗號。
               
-              【禁止行為】嚴禁擷取『本人』、『計劃』或中文名稱作為代碼。
-              【格式要求】僅回傳純 JSON 陣列，例如: [{"code":"HPHI2","term":"30","premium":12916}]
+              【禁止項目】絕不允許擷取『本人』、『1單位』等非代碼內容。
+              【回傳要求】僅回傳純 JSON 陣列，不准包含任何 Markdown 標籤或解釋文字。
             `},
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
