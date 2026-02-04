@@ -1,4 +1,4 @@
-// api/gemini.js - 自動模型匹配畢業版
+// api/gemini.js - 強化年期提取版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -6,27 +6,18 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   const { imageData } = req.body;
-  const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
+  const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; //
 
   try {
-    // 步驟 1：先抓取目前 API Key 權限下所有可用的模型列表
     const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`;
     const listRes = await fetch(listUrl);
     const listData = await listRes.json();
-
-    if (!listData.models) {
-      return res.status(200).json({ error: "無法獲取模型清單，請確認 API Key 是否正確設定。" });
-    }
-
-    // 步驟 2：從清單中找出最新、支援圖片生成的 Flash 模型
-    // 我們優先找 gemini-2.0-flash，找不到再找 gemini-1.5-flash-latest
     const availableModels = listData.models.map(m => m.name.split('/').pop());
     const targetModel = availableModels.find(m => m.includes('2.0-flash')) || 
                         availableModels.find(m => m.includes('1.5-flash')) || 
                         availableModels[0];
 
-    // 步驟 3：使用偵測到的正確模型名稱進行呼叫
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${API_KEY}`; //
     
     const response = await fetch(url, {
       method: 'POST',
@@ -34,7 +25,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: "提取南山人壽建議書 JSON：[{\"code\":\"代碼\",\"term\":\"年期\",\"premium\":保費}]" },
+            { text: "你現在是南山人壽保險專家。請精準提取圖片中表格內的：1.險種代碼(如20STCB) 2.年期(僅需數字，如20) 3.實繳保費。請特別注意『年期』通常在代碼旁邊或是繳費期間欄位。僅回傳 JSON 陣列：[{\"code\":\"代碼\",\"term\":\"年期數字\",\"premium\":金額}]" }, //
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
         }]
@@ -42,10 +33,8 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
-    if (data.error) return res.status(200).json({ error: `Google API (${targetModel}): ${data.error.message}` });
-
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "系統自動校準失敗: " + error.message });
+    res.status(200).json({ error: "自動校準運行中但解析微調失敗" });
   }
 }
