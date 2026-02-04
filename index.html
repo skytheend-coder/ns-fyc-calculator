@@ -56,7 +56,7 @@
                 return () => clearInterval(load);
             }, []);
 
-            // --- 核心修正：呼叫後端 Serverless Function 避開 CORS ---
+            // --- 核心修正：優化 Vercel API 呼叫與解析邏輯 ---
             const handleImageUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -68,7 +68,7 @@
                     try {
                         const base64Data = reader.result.split(',')[1];
                         
-                        // 不再直連 Google，改連往 Vercel 後端 API
+                        // 呼叫 Vercel 後端 API
                         const response = await fetch('/api/gemini', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -77,25 +77,39 @@
 
                         const result = await response.json();
                         
-                        if (result.error) throw new Error(result.error);
+                        // 如果後端回傳 error 欄位
+                        if (result.error) {
+                            alert("辨識失敗: " + (typeof result.error === 'object' ? JSON.stringify(result.error) : result.error));
+                            setIsAiProcessing(false);
+                            return;
+                        }
 
-                        // 處理後端回傳的 AI 內容
+                        // 解析 Gemini 1.5 Flash 回傳的內容
+                        let aiOutput = "";
                         if (result.candidates && result.candidates[0]?.content?.parts[0]?.text) {
-                            const aiText = result.candidates[0].content.parts[0].text.trim();
-                            const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-                            if (jsonMatch) {
-                                const parsedData = JSON.parse(jsonMatch[0]);
+                            aiOutput = result.candidates[0].content.parts[0].text.trim();
+                        } else {
+                            throw new Error("AI 未能辨識內容或格式錯誤");
+                        }
+
+                        // 提取 JSON 區塊
+                        const jsonMatch = aiOutput.match(/\[[\s\S]*\]/);
+                        if (jsonMatch) {
+                            const parsedData = JSON.parse(jsonMatch[0]);
+                            if (Array.isArray(parsedData)) {
                                 setRows(parsedData.map(item => ({
                                     id: generateId(),
-                                    code: String(item.code).toUpperCase().trim(),
-                                    term: String(item.term),
-                                    premium: String(item.premium).replace(/,/g, '')
+                                    code: String(item.code || '').toUpperCase().trim(),
+                                    term: String(item.term || ''),
+                                    premium: String(item.premium || '').replace(/,/g, '')
                                 })));
                                 setShowImportModal(false);
                             }
+                        } else {
+                            alert("無法從辨識結果中提取數據，請確保截圖包含完整的建議書表格");
                         }
                     } catch (err) {
-                        alert("辨識失敗 (後端錯誤): " + err.message);
+                        alert("解析過程出錯: " + err.message);
                     } finally { setIsAiProcessing(false); }
                 };
             };
@@ -212,14 +226,14 @@
                             </div>
                         </div>
                     </div>
-                    <footer className="mt-12 mb-6 text-center text-slate-400 text-[10px] font-bold tracking-widest uppercase">made by 小夏，有任何問題請回報</footer>
+                    <footer className="mt-12 mb-6 text-center text-slate-400 text-[10px] font-bold tracking-widest uppercase">made by 理炎</footer>
 
                     {showImportModal && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                             <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl space-y-6">
                                 <div className="flex justify-between items-center"><h3 className="text-2xl font-black">智慧導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
                                 <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 text-center space-y-3">
-                                    <p className="text-xs font-bold text-indigo-700 flex items-center justify-center gap-2"><Icon name="Camera" size={14} /> 上傳截圖辨識 (Vercel 版)</p>
+                                    <p className="text-xs font-bold text-indigo-700 flex items-center justify-center gap-2"><Icon name="Camera" size={14} /> 上傳截圖辨識 (Vercel 後端)</p>
                                     <input type="file" accept="image/*" onChange={handleImageUpload} disabled={isAiProcessing} className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-600 file:text-white cursor-pointer shadow-sm hover:file:bg-indigo-700 transition-all" />
                                     {isAiProcessing && <p className="mt-3 text-[10px] text-indigo-500 animate-pulse font-bold font-mono uppercase">正在透過中繼伺服器解析圖片...</p>}
                                 </div>
