@@ -1,4 +1,4 @@
-// api/gemini.js - 強化年期提取版
+// api/gemini.js - 南山主約年期強化版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -6,7 +6,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   const { imageData } = req.body;
-  const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; //
+  const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
     const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}`;
@@ -17,7 +17,7 @@ export default async function handler(req, res) {
                         availableModels.find(m => m.includes('1.5-flash')) || 
                         availableModels[0];
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${API_KEY}`; //
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${API_KEY}`;
     
     const response = await fetch(url, {
       method: 'POST',
@@ -25,16 +25,17 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: "你現在是南山人壽保險專家。請精準提取圖片中表格內的：1.險種代碼(如20STCB) 2.年期(僅需數字，如20) 3.實繳保費。請特別注意『年期』通常在代碼旁邊或是繳費期間欄位。僅回傳 JSON 陣列：[{\"code\":\"代碼\",\"term\":\"年期數字\",\"premium\":金額}]" }, //
+            { text: "你現在是保險建議書解析專家。請從圖片提取表格數據。特別注意：1. 險種代碼(如 20STCB)。 2. 年期：若代碼開頭有數字(如20)，則年期為該數字；若無，請找繳費期間欄位的數字。 3. 實繳保費。僅回傳 JSON 陣列：[{\"code\":\"20STCB\",\"term\":\"20\",\"premium\":5220}]。" },
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
-        }]
+        }],
+        generationConfig: { response_mime_type: "application/json" }
       })
     });
 
     const data = await response.json();
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "自動校準運行中但解析微調失敗" });
+    res.status(200).json({ error: "解析微調失敗" });
   }
 }
