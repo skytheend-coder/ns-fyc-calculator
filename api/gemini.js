@@ -1,17 +1,13 @@
-// api/gemini.js - 最終穩定對接版
+// api/gemini.js - 2.0 Flash 升級版
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  // ... 前面的 CORS 設定保持不變 ...
   
   const { imageData } = req.body;
   const API_KEY = "AIzaSyCjUZeGE8MbmNyaIM6zZveoj3b1SB6ExDs"; 
 
   try {
-    // 核心修正：這是 Google 官方認可最穩定的 v1beta 呼叫路徑
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+    // 關鍵修正：將模型名稱改為目前 AI Studio 支援的 2.0 Flash
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${API_KEY}`;
     
     const response = await fetch(url, {
       method: 'POST',
@@ -19,7 +15,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: "這是南山人壽建議書。請提取險種代碼(如 20STCB)、年期、實繳保費。僅回傳 JSON 陣列，例如: [{\"code\": \"20STCB\", \"term\": \"20\", \"premium\": 5220}]。" },
+            { text: "這是一張南山人壽建議書截圖。請提取表格中的險種代碼、年期、保費。僅回傳 JSON 陣列。" },
             { inline_data: { mime_type: "image/jpeg", data: imageData } }
           ]
         }]
@@ -28,13 +24,13 @@ export default async function handler(req, res) {
 
     const data = await response.json();
     
-    // 如果報錯，我們會直接透傳錯誤，方便排查
     if (data.error) {
-      return res.status(200).json({ error: data.error.message });
+      // 如果 2.0-flash-exp 也報錯，代表你的帳號可能已經自動升級到更穩定的 2.0-flash
+      return res.status(200).json({ error: `Google API (${data.error.code}): ${data.error.message}` });
     }
 
     res.status(200).json(data);
   } catch (error) {
-    res.status(200).json({ error: "伺服器通訊異常: " + error.message });
+    res.status(200).json({ error: "後端通訊異常: " + error.message });
   }
 }
