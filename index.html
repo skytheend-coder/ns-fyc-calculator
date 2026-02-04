@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>業績計算機 - 前豐小工具</title>
+    <script>
+        document.write('<script src="rates.js?v=' + Date.now() + '"><\/script>');
+    </script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        const Icon = ({ name, size = 16, className = "" }) => {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (window.lucide && ref.current) {
+                    const iconName = name.replace(/([A-Z])/g, "-$1").toLowerCase().replace(/^-/, "");
+                    ref.current.innerHTML = `<i data-lucide="${iconName}"></i>`;
+                    window.lucide.createIcons({ nameAttr: 'data-lucide', root: ref.current });
+                }
+            }, [name]);
+            return <span ref={ref} className={`inline-block align-middle leading-none ${className}`} style={{ width: size, height: size }}></span>;
+        };
+
+        const generateId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now() + Math.random();
+
+        const App = () => {
+            const [db, setDb] = useState([]);
+            const [age, setAge] = useState('32');
+            const [rows, setRows] = useState([{ id: generateId(), code: '', term: '', premium: '' }]);
+            const [showImportModal, setShowImportModal] = useState(false);
+            const [importText, setImportText] = useState('');
+            const [isAiProcessing, setIsAiProcessing] = useState(false);
+
+            useEffect(() => {
+                const load = setInterval(() => {
+                    if (window.PRODUCT_RATES && window.PRODUCT_RATES.length > 0) {
+                        setDb([...window.PRODUCT_RATES]);
+                        clearInterval(load);
+                    }
+                }, 200);
+                return () => clearInterval(load);
+            }, []);
+
+            // --- 核心修正：呼叫後端 Serverless Function 避開 CORS ---
+            const handleImageUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setIsAiProcessing(true);
+                
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    try {
+                        const base64Data = reader.result.split(',')[1];
+                        
+                        // 不再直連 Google，改連往 Vercel 後端 API
+                        const response = await fetch('/api/gemini', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ imageData: base64Data })
+                        });
+
+                        const result = await response.json();
+                        
+                        if (result.error) throw new Error(result.error);
+
+                        // 處理後端回傳的 AI 內容
+                        if (result.candidates && result.candidates[0]?.content?.parts[0]?.text) {
+                            const aiText = result.candidates[0].content.parts[0].text.trim();
+                            const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+                            if (jsonMatch) {
+                                const parsedData = JSON.parse(jsonMatch[0]);
+                                setRows(parsedData.map(item => ({
+                                    id: generateId(),
+                                    code: String(item.code).toUpperCase().trim(),
+                                    term: String(item.term),
+                                    premium: String(item.premium).replace(/,/g, '')
+                                })));
+                                setShowImportModal(false);
+                            }
+                        }
+                    } catch (err) {
+                        alert("辨識失敗 (後端錯誤): " + err.message);
+                    } finally { setIsAiProcessing(false); }
+                };
+            };
+
+            const handleTextImport = () => {
+                const normalized = importText.replace(/,/g, '').replace(/（/g, '(').replace(/）/g, ')');
+                const lines = normalized.split('\n');
+                const tempRows = [];
+                const sortedCodes = [...new Set(db.map(p => p.code))].sort((a, b) => b.length - a.length);
+
+                lines.forEach((line, idx) => {
+                    const upperLine = line.toUpperCase();
+                    const foundCode = sortedCodes.find(c => upperLine.includes(c));
+                    if (foundCode) {
+                        let term = (upperLine.match(/(?:^|\D)(\d{1,2})(?:$|\D)/) || [])[1] || "";
+                        let searchArea = lines.slice(idx, idx + 8).join('\n');
+                        const cleanArea = searchArea.replace(/\d+[,]?\d*\s*(?:元|萬元|計劃|份|單位|1單|2單)/g, '');
+                        const nums = (cleanArea.match(/\d+/g) || []).map(Number);
+                        let premium = "";
+                        for (let i = 0; i < nums.length - 1; i++) {
+                            if (nums[i] > 500 && nums[i] === nums[i+1]) { premium = nums[i].toString(); break; }
+                        }
+                        if (!premium) premium = nums.find(n => n > 500) || "";
+                        if (premium) tempRows.push({ id: generateId(), code: foundCode, term: String(term), premium: String(premium) });
+                    }
+                });
+                if (tempRows.length > 0) { setRows(tempRows); setShowImportModal(false); setImportText(''); }
+                else alert("文字辨識失敗");
+            };
+
+            const calculateRowResult = (row) => {
+                const inputCode = (row.code || '').trim().toUpperCase();
+                if (!inputCode) return { valid: false, availableTerms: [] };
+                let matched = db.filter(r => r.code === inputCode || (r.alias && r.alias.includes(inputCode)));
+                const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => parseInt(a) - parseInt(b));
+                const rate = matched.find(r => String(r.term) === String(row.term) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
+                if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code };
+                const p = parseFloat(row.premium) || 0;
+                const fyc = p * (rate.fycRate / 100);
+                const weight = (function(c, t){
+                    const tv = parseInt(t);
+                    if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(c)) return (tv === 2) ? 0.6 : 3.0;
+                    if (['LIFE', 'FIXED', 'INVEST'].includes(c)) {
+                        if (tv === 1) return 0.05; if (tv === 2) return 0.2; if (tv === 3) return 0.3;
+                        if (tv === 6) return 1.0; if (tv >= 10 && tv < 20) return 2.0; if (tv >= 20) return 3.0;
+                    }
+                    return 1.0;
+                })(rate.cat, rate.term);
+                return { valid: true, fyc, total: fyc + (p * (rate.marketingRate/100)) + (fyc * 0.1), weightedValue: p * weight, matchedCode: rate.code, availableTerms };
+            };
+
+            const totals = useMemo(() => rows.reduce((acc, r) => {
+                const res = calculateRowResult(r);
+                return { total: acc.total + (res.valid ? res.total : 0), premium: acc.premium + (parseFloat(r.premium) || 0), v: acc.v + (res.valid ? res.weightedValue : 0) };
+            }, { total: 0, premium: 0, v: 0 }), [rows, age, db]);
+
+            return (
+                <div className="min-h-screen bg-slate-50 p-4 md:p-8 flex flex-col font-medium text-slate-800">
+                    <div className="max-w-7xl mx-auto w-full flex-grow">
+                        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
+                            <div className="flex items-center gap-4">
+                                <div className="bg-indigo-600 p-4 rounded-3xl shadow-xl text-white"><Icon name="Calculator" size={32} /></div>
+                                <div><h1 className="text-3xl font-black tracking-tight">業績計算機</h1><p className="text-slate-400 font-bold uppercase text-[10px] tracking-widest mt-1">前豐小工具</p></div>
+                            </div>
+                            <div className="bg-white px-8 py-4 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4">
+                                <p className="text-[10px] font-bold text-slate-300 uppercase">客戶年齡</p>
+                                <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-12 text-3xl font-black text-indigo-600 text-center outline-none bg-transparent" />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+                            <div className="xl:col-span-7 bg-white p-8 rounded-[2.5rem] shadow-sm space-y-6 border border-slate-100">
+                                <div className="flex justify-between items-center border-b pb-4">
+                                    <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800"><Icon name="ClipboardList" className="text-indigo-500" /> 建議書清單</h2>
+                                    <button onClick={() => setShowImportModal(true)} className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-full text-xs font-bold hover:bg-indigo-100 transition-all shadow-sm"><Icon name="FileText" size={14} /> 智慧導入</button>
+                                </div>
+                                <div className="space-y-4">
+                                    {rows.map(row => {
+                                        const res = calculateRowResult(row);
+                                        return (
+                                            <div key={row.id} className={`grid grid-cols-12 gap-3 items-center p-4 rounded-[2rem] border-2 transition-all ${res.valid ? 'bg-indigo-50/20 border-indigo-100 shadow-sm' : 'border-slate-100'}`}>
+                                                <div className="col-span-4 relative">
+                                                    <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value.toUpperCase()} : r))} className="w-full p-3 rounded-xl bg-slate-50 border-none font-bold uppercase shadow-inner text-sm outline-none" />
+                                                    {res.matchedCode && <span className="absolute -bottom-2 left-3 text-[9px] bg-white px-2 py-0.5 rounded-full border border-indigo-100 text-indigo-500 font-bold">{res.matchedCode}</span>}
+                                                </div>
+                                                <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-3 rounded-xl bg-slate-50 border-none font-bold shadow-inner text-sm outline-none">
+                                                    <option value="">年期</option>
+                                                    {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
+                                                </select>
+                                                <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-3 rounded-xl bg-slate-50 border-none font-bold shadow-inner text-sm outline-none" />
+                                                <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-500 transition-colors"><Icon name="XCircle" size={20} /></button>
+                                            </div>
+                                        );
+                                    })}
+                                    <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-3xl text-slate-300 font-bold hover:border-indigo-200">+ 新增商品</button>
+                                </div>
+                            </div>
+
+                            <div className="xl:col-span-5 text-center">
+                                <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl flex flex-col h-full justify-between border border-slate-800">
+                                    <div>
+                                        <p className="text-indigo-400 font-bold text-[10px] uppercase tracking-widest mb-3">總預估收益 (含10%獎勵)</p>
+                                        <div className="text-6xl font-black mb-1">${Math.round(totals.total).toLocaleString()}</div>
+                                        <p className="text-slate-400 text-[10px] font-bold opacity-80 mt-2">數字僅供參考</p>
+                                    </div>
+                                    <div className="mt-8 space-y-4">
+                                        <p className="text-slate-500 text-xs font-bold border-b border-slate-800 pb-4">建議書總保費: ${Math.round(totals.premium).toLocaleString()}</p>
+                                        <div className="flex justify-between px-4 font-bold items-center text-left">
+                                            <span className="text-slate-500 text-xs uppercase tracking-widest">加權業績 (V)</span>
+                                            <span className="text-2xl text-indigo-300">{Math.round(totals.v).toLocaleString()}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <footer className="mt-12 mb-6 text-center text-slate-400 text-[10px] font-bold tracking-widest uppercase">made by 小夏，有任何問題請回報</footer>
+
+                    {showImportModal && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl space-y-6">
+                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">智慧導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
+                                <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 text-center space-y-3">
+                                    <p className="text-xs font-bold text-indigo-700 flex items-center justify-center gap-2"><Icon name="Camera" size={14} /> 上傳截圖辨識 (Vercel 版)</p>
+                                    <input type="file" accept="image/*" onChange={handleImageUpload} disabled={isAiProcessing} className="text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-600 file:text-white cursor-pointer shadow-sm hover:file:bg-indigo-700 transition-all" />
+                                    {isAiProcessing && <p className="mt-3 text-[10px] text-indigo-500 animate-pulse font-bold font-mono uppercase">正在透過中繼伺服器解析圖片...</p>}
+                                </div>
+                                <div className="relative"><div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-100"></span></div><div className="relative flex justify-center text-[10px] font-bold text-slate-300 uppercase"><span className="bg-white px-2">或手動貼上文字</span></div></div>
+                                <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-3xl p-4 outline-none text-xs resize-none focus:border-indigo-200 transition-all" placeholder="貼上文字內容..." value={importText} onChange={e => setImportText(e.target.value)} />
+                                <div className="flex gap-4"><button onClick={() => setShowImportModal(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-400 hover:bg-slate-200 transition-all">取消</button><button onClick={handleTextImport} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg hover:bg-indigo-700 transition-all active:scale-95">開始文字辨識</button></div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
