@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -41,7 +42,6 @@
         const App = () => {
             const [db, setDb] = useState([]);
             const [age, setAge] = useState('32');
-            const [currency, setCurrency] = useState('TWD');
             const [rows, setRows] = useState([{ id: generateId(), code: '', term: '', premium: '' }]);
             const [showImportModal, setShowImportModal] = useState(false);
             const [importText, setImportText] = useState('');
@@ -57,10 +57,15 @@
             const calculateRowResult = (row) => {
                 let input = (row.code || '').trim().toUpperCase();
                 if (!input) return { valid: false, availableTerms: [] };
-                let matched = db.filter(r => r.code === input || (r.alias && r.alias.includes(input)));
+                
+                // 去除中文，只保留末尾英數代碼
+                const cleanCode = input.match(/[A-Z0-9]+$/)?.[0] || input;
+                
+                let matched = db.filter(r => r.code === cleanCode || (r.alias && r.alias.includes(cleanCode)));
                 const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => parseInt(a) - parseInt(b));
                 const rate = matched.find(r => String(r.term) === String(row.term) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
-                if (!rate) return { valid: false, availableTerms };
+
+                if (!rate) return { valid: false, availableTerms, matchedCode: cleanCode };
                 const p = parseFloat(row.premium) || 0;
                 const fyc = p * (rate.fycRate / 100);
                 const marketing = p * (rate.marketingRate / 100);
@@ -100,21 +105,19 @@
                             body: JSON.stringify({ imageData: reader.result.split(',')[1] })
                         });
                         const data = await response.json();
-                        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || data.text || "";
+                        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
                         const jsonMatch = rawText.match(/\[[\s\S]*\]/);
                         if (jsonMatch) {
                             const parsed = JSON.parse(jsonMatch[0]);
-                            // 修正：確保辨識完後數據能成功寫入狀態
-                            const newRows = parsed.map(item => ({
+                            setRows(parsed.map(item => ({
                                 id: generateId(),
-                                code: String(item.code || '').toUpperCase().trim(),
-                                term: String(item.term || ''),
+                                code: String(item.code || '').replace(/.*(?=[A-Z0-9]{4,})/i, '').trim().toUpperCase(),
+                                term: String(item.term || '').replace(/[^0-9]/g, ''),
                                 premium: String(item.premium || '').replace(/[^0-9]/g, '')
-                            }));
-                            setRows(newRows);
+                            })));
                             setShowImportModal(false);
                         }
-                    } catch (err) { alert("辨識讀入失敗，請確認截圖是否包含表格區塊"); } finally { setIsAiProcessing(false); }
+                    } catch (err) { alert("辨識失敗"); } finally { setIsAiProcessing(false); }
                 };
             };
 
@@ -132,7 +135,7 @@
                 if (newRows.length) { setRows(newRows); setShowImportModal(false); setImportText(''); }
             };
 
-            // 去重後的商品庫分組邏輯
+            // 商品分組與去重 (每個代碼只留一個)
             const groupedDb = useMemo(() => {
                 const categoryLabels = { 'LIFE': '利變型壽險', 'FIXED': '固定型壽險', 'PA': '意外傷害險', 'HI': '住院醫療險', 'CA': '重大傷病險', 'LTC': '長期照顧險', 'INVEST': '投資/年金', 'TOPIC': '其他/專案' };
                 return Object.entries(categoryLabels).map(([catKey, label]) => {
@@ -149,28 +152,24 @@
             }, [db]);
 
             return (
-                <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-medium pb-20">
+                <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-medium">
                     <div className="max-w-6xl mx-auto space-y-8">
                         {/* Header */}
                         <div className="flex justify-between items-center">
                             <div className="flex items-center gap-4">
                                 <div className="bg-indigo-600 p-4 rounded-3xl text-white shadow-lg"><Icon name="Zap" size={32} /></div>
-                                <div><h1 className="text-3xl font-black">業績計算機</h1><p className="text-slate-400 text-[10px] font-bold uppercase mt-1 tracking-widest">南山人壽 前豐區專屬</p></div>
+                                <div><h1 className="text-3xl font-black">業績計算機</h1><p className="text-slate-400 text-[10px] font-bold uppercase mt-1 tracking-widest">南山前豐專屬</p></div>
                             </div>
-                            <div className="flex gap-3">
-                                <button onClick={() => setCurrency(currency === 'TWD' ? 'USD' : 'TWD')} className="bg-white px-4 py-2 rounded-full shadow-sm border text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{currency} 模式</button>
-                                <div className="bg-white px-4 py-2 rounded-full shadow-sm border flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-slate-300 uppercase">年齡</span>
-                                    <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-sm font-black text-indigo-600 bg-transparent outline-none text-center" />
-                                </div>
+                            <div className="bg-white px-6 py-3 rounded-full shadow-sm border flex items-center gap-3">
+                                <span className="text-[10px] font-bold text-slate-300 uppercase">年齡</span>
+                                <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-xl font-black text-indigo-600 bg-transparent outline-none text-center" />
                             </div>
                         </div>
 
-                        {/* 計算與儀表板 */}
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                            <div className="lg:col-span-7 space-y-4">
+                            <div className="lg:col-span-7">
                                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
-                                    <div className="flex justify-between items-center mb-6 px-2">
+                                    <div className="flex justify-between items-center mb-6">
                                         <h2 className="font-bold text-slate-700">商品清單</h2>
                                         <button onClick={() => setShowImportModal(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full">智慧導入</button>
                                     </div>
@@ -178,52 +177,48 @@
                                         {rows.map(row => {
                                             const res = calculateRowResult(row);
                                             return (
-                                                <div key={row.id} className={`p-4 rounded-[1.5rem] border-2 transition-all ${res.valid ? 'bg-indigo-50/20 border-indigo-100 shadow-sm' : 'border-slate-100'}`}>
+                                                <div key={row.id} className={`p-4 rounded-[1.5rem] border-2 ${res.valid ? 'bg-indigo-50/20 border-indigo-100' : 'border-slate-100'}`}>
                                                     <div className="grid grid-cols-12 gap-3 items-center">
                                                         <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value} : r))} className="col-span-4 p-2.5 bg-white rounded-xl font-bold text-sm outline-none uppercase shadow-inner" />
-                                                        <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2.5 bg-white rounded-xl font-bold text-sm outline-none shadow-inner cursor-pointer">
+                                                        <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2.5 bg-white rounded-xl font-bold text-sm outline-none shadow-inner">
                                                             <option value="">年期</option>
                                                             {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
                                                         </select>
                                                         <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-2.5 bg-white rounded-xl font-bold text-sm outline-none shadow-inner" />
-                                                        <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-400"><Icon name="Trash2" size={18} /></button>
+                                                        <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200"><Icon name="Trash2" /></button>
                                                     </div>
                                                 </div>
                                             );
                                         })}
-                                        <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-[1.5rem] text-slate-300 font-bold hover:border-indigo-200 transition-all">+ 新增險種</button>
+                                        <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-[1.5rem] text-slate-300 font-bold hover:border-indigo-200">+ 新增項目</button>
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="lg:col-span-5 space-y-6">
-                                <div className="bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl relative overflow-hidden">
-                                    <p className="text-indigo-400 text-[10px] font-bold uppercase tracking-widest mb-4">預估總收益 (含獎勵金)</p>
+                            <div className="lg:col-span-5">
+                                <div className="bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl">
+                                    <p className="text-indigo-400 text-[10px] uppercase tracking-widest mb-4">預估總收益</p>
                                     <div className="text-7xl font-black mb-8">${Math.round(totals.total).toLocaleString()}</div>
-                                    <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-8">
-                                        <div><p className="text-white/40 text-[9px] font-bold uppercase mb-1">純 FYC 收入</p><p className="text-2xl font-black text-indigo-200">${Math.round(totals.fyc).toLocaleString()}</p></div>
-                                        <div className="text-right"><p className="text-white/40 text-[9px] font-bold uppercase mb-1">加權業績 (V)</p><p className="text-2xl font-black text-emerald-300">{Math.round(totals.v).toLocaleString()}</p></div>
+                                    <div className="flex justify-between border-t border-white/10 pt-8">
+                                        <div><p className="text-white/40 text-[9px] font-bold">純 FYC</p><p className="text-2xl font-black text-indigo-200">${Math.round(totals.fyc).toLocaleString()}</p></div>
+                                        <div className="text-right"><p className="text-white/40 text-[9px] font-bold">加權 V</p><p className="text-2xl font-black text-emerald-300">{Math.round(totals.v).toLocaleString()}</p></div>
                                     </div>
-                                </div>
-                                <div className="bg-white p-6 rounded-[2rem] shadow-sm border flex justify-between items-center px-10">
-                                    <span className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">建議書總保費</span>
-                                    <span className="text-2xl font-black text-slate-800">${Math.round(totals.premium).toLocaleString()}</span>
                                 </div>
                             </div>
                         </div>
 
-                        {/* 去重與縮小後的商品收錄區 */}
+                        {/* 去重收錄庫 */}
                         <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-100">
-                            <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-slate-700"><Icon name="BookOpen" className="text-indigo-500" /> 商品資料庫</h3>
-                            <div className="space-y-6">
-                                {groupedDb.map(group => group.items.length > 0 && (
-                                    <div key={group.label} className="border-b border-slate-50 pb-4 last:border-0">
+                            <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-slate-700"><Icon name="BookOpen" className="text-indigo-500" /> 商品庫</h3>
+                            <div className="space-y-8">
+                                {groupedDb.map(group => (
+                                    <div key={group.label}>
                                         <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-3 border-l-2 border-indigo-400 pl-2">{group.label}</h4>
-                                        <div className="grid grid-cols-3 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
                                             {group.items.map((item, idx) => (
-                                                <div key={idx} className="p-1.5 bg-slate-50 rounded-lg flex justify-between items-center border border-slate-100 hover:border-indigo-100 transition-all">
-                                                    <span className="font-bold text-slate-600 text-[9px] truncate">{item.code}</span>
-                                                    <a href={item.dmUrl} target="_blank" className="text-slate-300 hover:text-indigo-400"><Icon name="ExternalLink" size={8} /></a>
+                                                <div key={idx} className="p-2 bg-slate-50 rounded-xl flex justify-between items-center border border-slate-100">
+                                                    <span className="font-bold text-slate-600 text-[10px]">{item.code}</span>
+                                                    <a href={item.dmUrl} target="_blank"><Icon name="ExternalLink" size={10} className="text-slate-300 hover:text-indigo-400" /></a>
                                                 </div>
                                             ))}
                                         </div>
@@ -236,21 +231,20 @@
                     {showImportModal && (
                         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
                             <div className="bg-white rounded-[3rem] w-full max-w-lg p-10 shadow-2xl space-y-8">
-                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">智慧導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
+                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">建議書導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300"><Icon name="X" size={24} /></button></div>
                                 <div className="space-y-6">
                                     <div className="bg-indigo-50 border-4 border-dashed border-indigo-100 p-8 rounded-[2.5rem] text-center">
                                         <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="ai-upload" />
-                                        <label htmlFor="ai-upload" className="block w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl cursor-pointer hover:bg-indigo-700 transition-all leading-none">
-                                            {isAiProcessing ? '🤖 正在分析表格中...' : '📷 上傳建議書截圖'}
+                                        <label htmlFor="ai-upload" className="block w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl cursor-pointer hover:bg-indigo-700 transition-all">
+                                            {isAiProcessing ? '正在辨識...' : '📷 上傳截圖辨識'}
                                         </label>
                                     </div>
-                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs font-mono outline-none" placeholder="貼上明細文字..." value={importText} onChange={e => setImportText(e.target.value)} />
-                                    <button onClick={handleTextImport} className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl font-bold text-slate-500 hover:bg-slate-50 transition-all">確認文字導入</button>
+                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs outline-none" placeholder="貼上文字..." value={importText} onChange={e => setImportText(e.target.value)} />
+                                    <button onClick={handleTextImport} className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl font-bold text-slate-500 hover:bg-slate-50">確認導入</button>
                                 </div>
                             </div>
                         </div>
                     )}
-                    <footer className="mt-12 text-center text-slate-300 text-[10px] font-bold tracking-widest uppercase pb-8">made by 理炎</footer>
                 </div>
             );
         };
