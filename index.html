@@ -51,24 +51,13 @@
                 let matched = db.filter(r => r.code === code || (r.alias && r.alias.includes(code)));
                 const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => a - b);
                 const rate = matched.find(r => String(r.term) === String(row.term) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
-                if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code };
-                const fyc = p * (rate.fycRate / 100);
-                const weight = (function(cat, t){
-                    const tv = parseInt(t);
-                    if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(cat)) return (tv === 2) ? 0.6 : 3.0;
-                    if (['LIFE', 'FIXED', 'INVEST'].includes(cat)) {
-                        if (tv === 1) return 0.05; if (tv === 2) return 0.2; if (tv === 3) return 0.3;
-                        if (tv === 6) return 1.0; if (tv >= 10 && tv < 20) return 2.0; if (tv >= 20) return 3.0;
-                    }
-                    return 1.0;
-                })(rate.cat, rate.term);
-                return { valid: true, fyc, marketing: p * (rate.marketingRate / 100), bonus: fyc * 0.1, v: p * weight, availableTerms };
+                return { valid: !!rate, fyc: p * (rate?.fycRate / 100 || 0), marketing: p * (rate?.marketingRate / 100 || 0), bonus: (p * (rate?.fycRate / 100 || 0)) * 0.1, availableTerms, matchedCode: matched[0]?.code };
             };
 
             const totals = useMemo(() => rows.reduce((acc, r) => {
                 const res = calculateRow(r);
-                return res.valid ? { total: acc.total + res.fyc + res.marketing + res.bonus, v: acc.v + res.v, p: acc.p + (parseFloat(r.premium) || 0) } : acc;
-            }, { total: 0, v: 0, p: 0 }), [rows, age, db]);
+                return res.valid ? { total: acc.total + res.fyc + res.marketing + res.bonus, p: acc.p + (parseFloat(r.premium) || 0) } : acc;
+            }, { total: 0, p: 0 }), [rows, age, db]);
 
             const handleImageUpload = async (e) => {
                 const file = e.target.files[0];
@@ -87,105 +76,95 @@
                         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || data.text || "";
                         const jsonMatch = rawText.match(/\[[\s\S]*\]/);
                         if (jsonMatch) {
-                            const parsed = JSON.parse(jsonMatch[0]);
-                            setRows(parsed.map(i => ({ id: Math.random(), code: String(i.code).toUpperCase(), term: String(i.term), premium: String(i.premium).replace(/[^0-9]/g, '') })));
+                            setRows(JSON.parse(jsonMatch[0]).map(i => ({ id: Math.random(), code: String(i.code).toUpperCase(), term: String(i.term), premium: String(i.premium).replace(/[^0-9]/g, '') })));
                             setShowImportModal(false);
-                        } else { alert("辨識未完成：AI 回傳格式不正確"); }
-                    } catch (err) { alert("通訊異常，請重試"); } finally { setIsAiProcessing(false); }
+                        }
+                    } catch (err) { alert("辨識失敗"); } finally { setIsAiProcessing(false); }
                 };
             };
 
             const handleTextImport = () => {
-                const newRows = importText.split('\n').map(line => {
-                    const parts = line.trim().split(/\s+/);
-                    if (parts.length >= 3) return { id: Math.random(), code: parts[0].toUpperCase(), term: parts[1].replace(/[^0-9]/g, ''), premium: parts[parts.length-1].replace(/[^0-9]/g, '') };
-                    return null;
-                }).filter(r => r);
+                // 🚀 文字導入精準修復版：從整段文字中「搜尋」已收錄的代碼
+                const newRows = [];
+                const normalizedText = importText.toUpperCase().replace(/,/g, '');
+                db.forEach(product => {
+                    if (normalizedText.includes(product.code)) {
+                        // 如果文字裡包含代碼，試圖在附近找數字當保費與年期
+                        const regex = new RegExp(`${product.code}\\s+(\\d+Y|\\d+)?.*?(\\d{3,7})`, 'g');
+                        let m;
+                        while ((m = regex.exec(normalizedText)) !== null) {
+                            newRows.push({ id: Math.random(), code: product.code, term: m[1] || product.term, premium: m[2] });
+                        }
+                    }
+                });
                 if (newRows.length) { setRows(newRows); setShowImportModal(false); setImportText(''); }
+                else { alert("找不到匹配的商品代碼"); }
             };
 
             return (
                 <div className="min-h-screen bg-slate-50 p-4 md:p-8">
                     <div className="max-w-6xl mx-auto space-y-8">
                         <div className="flex justify-between items-center">
-                            <div className="flex items-center gap-4">
-                                <div className="bg-indigo-600 p-4 rounded-3xl text-white shadow-lg"><Icon name="Zap" size={32} /></div>
-                                <h1 className="text-3xl font-black">業績計算機</h1>
-                            </div>
-                            <div className="bg-white px-6 py-3 rounded-full shadow-sm border flex items-center gap-3">
-                                <span className="text-[10px] font-bold text-slate-300">年齡</span>
-                                <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-xl font-black text-indigo-600 bg-transparent outline-none" />
-                            </div>
+                            <h1 className="text-3xl font-black text-indigo-600 flex items-center gap-2"><Icon name="Zap" size={32} /> 業績計算機</h1>
+                            <div className="bg-white px-6 py-3 rounded-full shadow-sm border font-bold text-indigo-600">年齡: <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 outline-none" /> 歲</div>
                         </div>
-
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                            <div className="lg:col-span-7 bg-white p-6 rounded-[2.5rem] shadow-sm border">
+                            <div className="lg:col-span-7 bg-white p-8 rounded-[3rem] shadow-sm border">
                                 <div className="flex justify-between mb-6">
-                                    <h2 className="font-bold text-slate-700">商品清單</h2>
-                                    <button onClick={() => setShowImportModal(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full hover:bg-indigo-100 transition-all">智慧導入</button>
+                                    <h2 className="font-bold">商品清單</h2>
+                                    <button onClick={() => setShowImportModal(true)} className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-full font-bold text-xs">智慧導入</button>
                                 </div>
                                 <div className="space-y-4">
                                     {rows.map(row => {
                                         const res = calculateRow(row);
                                         return (
-                                            <div key={row.id} className={`p-4 rounded-3xl border-2 transition-all ${res.valid ? 'bg-indigo-50/20 border-indigo-100' : 'border-slate-100'}`}>
+                                            <div key={row.id} className={`p-4 rounded-3xl border-2 ${res.valid ? 'bg-indigo-50/30 border-indigo-100' : 'border-slate-100'}`}>
                                                 <div className="grid grid-cols-12 gap-3 items-center">
-                                                    <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value} : r))} className="col-span-4 p-2 bg-white rounded-xl shadow-inner uppercase font-bold text-sm outline-none" />
-                                                    <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2 bg-white rounded-xl shadow-inner font-bold text-sm cursor-pointer">
+                                                    <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value} : r))} className="col-span-4 p-2 rounded-xl shadow-inner uppercase font-bold text-sm outline-none" />
+                                                    <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2 rounded-xl shadow-inner font-bold text-sm">
                                                         <option value="">年期</option>
                                                         {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
                                                     </select>
-                                                    <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-2 bg-white rounded-xl shadow-inner font-bold text-sm outline-none" />
-                                                    <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-400"><Icon name="Trash2" /></button>
+                                                    <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-2 rounded-xl shadow-inner font-bold text-sm outline-none" />
+                                                    <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200"><Icon name="Trash2" /></button>
                                                 </div>
                                             </div>
                                         );
                                     })}
-                                    <button onClick={() => setRows([...rows, {id: Math.random(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-3xl text-slate-300 font-bold hover:border-indigo-200 transition-all">+ 新增險種</button>
+                                    <button onClick={() => setRows([...rows, {id: Math.random(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-3xl text-slate-300 font-bold">+ 新增</button>
                                 </div>
                             </div>
-                            <div className="lg:col-span-5 bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl relative overflow-hidden">
-                                <p className="text-indigo-400 text-xs font-bold uppercase tracking-widest mb-4">預估總收益</p>
+                            <div className="lg:col-span-5 bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl">
+                                <p className="text-indigo-400 text-xs font-bold uppercase mb-4">預估總收益</p>
                                 <div className="text-7xl font-black mb-8">${Math.round(totals.total).toLocaleString()}</div>
-                                <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-8">
-                                    <div><p className="text-white/40 text-[9px] uppercase">加權業績 (V)</p><p className="text-2xl font-black text-emerald-300">{Math.round(totals.v).toLocaleString()}</p></div>
-                                    <div><p className="text-white/40 text-[9px] uppercase">建議書保費</p><p className="text-2xl font-black text-indigo-200">${Math.round(totals.p).toLocaleString()}</p></div>
-                                </div>
+                                <div className="border-t border-white/10 pt-8"><p className="text-white/40 text-[10px]">建議書總保費</p><p className="text-2xl font-black text-indigo-200">${Math.round(totals.p).toLocaleString()}</p></div>
                             </div>
                         </div>
-
-                        <div className="bg-white p-8 rounded-[3rem] shadow-sm border text-sm">
-                            <h3 className="font-black mb-6">商品收錄區</h3>
-                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                        {/* 商品收錄區 - 縮小版 */}
+                        <div className="bg-white p-8 rounded-[3rem] shadow-sm border">
+                            <h3 className="font-bold mb-4 text-slate-400 text-xs uppercase">商品庫 (不分年期)</h3>
+                            <div className="flex flex-wrap gap-2">
                                 {[...new Set(db.map(p => p.code))].map(code => (
-                                    <div key={code} className="p-2 bg-slate-50 rounded-xl flex justify-between items-center text-[10px] font-bold">
-                                        <span>{code}</span>
-                                        <a href={db.find(p => p.code === code)?.dmUrl} target="_blank"><Icon name="ExternalLink" size={12} className="text-slate-300 hover:text-indigo-500" /></a>
-                                    </div>
+                                    <span key={code} className="px-3 py-1 bg-slate-50 border rounded-lg text-[10px] font-bold text-slate-500">{code}</span>
                                 ))}
                             </div>
                         </div>
                     </div>
-
                     {showImportModal && (
                         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
-                            <div className="bg-white rounded-[3rem] w-full max-w-lg p-10 shadow-2xl space-y-8 leading-normal">
-                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">智慧導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
+                            <div className="bg-white rounded-[3rem] w-full max-w-lg p-10 shadow-2xl space-y-8">
+                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">建議書導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300"><Icon name="X" size={24} /></button></div>
                                 <div className="space-y-6">
                                     <div className="bg-indigo-50 border-4 border-dashed border-indigo-100 p-8 rounded-[2.5rem] text-center">
                                         <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="ai-up" />
-                                        <label htmlFor="ai-up" className="block w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl cursor-pointer hover:bg-indigo-700 transition-all leading-none">
-                                            {isAiProcessing ? '🤖 正在辨識並載入中...' : '📷 上傳建議書截圖'}
-                                        </label>
+                                        <label htmlFor="ai-up" className="block w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl cursor-pointer">{isAiProcessing ? '辨識中...' : '📷 上傳建議書截圖'}</label>
                                     </div>
-                                    <div className="relative text-center"><span className="bg-white px-4 text-[10px] text-slate-300 font-bold uppercase tracking-widest relative z-10">或 貼上文字辨識</span><hr className="absolute top-1/2 w-full border-slate-100"/></div>
-                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs font-mono outline-none" placeholder="貼上建議書保費明細文字..." value={importText} onChange={e => setImportText(e.target.value)} />
-                                    <button onClick={handleTextImport} className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl font-bold text-slate-500 hover:bg-slate-50 transition-all">確認導入</button>
+                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs outline-none" placeholder="貼上文字內容..." value={importText} onChange={e => setImportText(e.target.value)} />
+                                    <button onClick={handleTextImport} className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl font-bold text-slate-500">確認文字導入</button>
                                 </div>
                             </div>
                         </div>
                     )}
-                    <footer className="mt-12 text-center text-slate-300 text-[10px] font-bold tracking-widest uppercase pb-8">made by 理炎</footer>
                 </div>
             );
         };
