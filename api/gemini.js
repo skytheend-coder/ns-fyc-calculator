@@ -1,4 +1,4 @@
-// api/gemini.js - 最終穩定版
+// api/gemini.js - 最終暴力校準版
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -9,33 +9,45 @@ export default async function handler(req, res) {
   const { imageData } = req.body;
   const API_KEY = "AIzaSyDg_iNtdfK0wplOxG6OoPXbOvaoBCcF_O0"; 
 
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: "這是南山建議書。提取險種代碼(如 20STCB)、年期、折扣後保費。僅回傳 JSON 陣列，例如: [{\"code\": \"20STCB\", \"term\": \"20\", \"premium\": 5220}]。" },
-            { inline_data: { mime_type: "image/jpeg", data: imageData } }
-          ]
-        }],
-        generationConfig: { response_mime_type: "application/json" }
-      })
-    });
+  // 定義三種 Google 認可但經常變動的路徑格式
+  const urls = [
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/gemini-1.5-flash:generateContent?key=${API_KEY}`
+  ];
 
-    const data = await response.json();
-    
-    // 如果 Google 有報錯，我們回傳一個明確的字串而非物件
-    if (data.error) {
-      return res.status(200).json({ error: String(data.error.message) });
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: "這是南山人壽建議書。請提取險種代碼(如 20STCB)、年期、折扣後保費。僅回傳 JSON 陣列，例如: [{\"code\": \"20STCB\", \"term\": \"20\", \"premium\": 5220}]。" },
+              { inline_data: { mime_type: "image/jpeg", data: imageData } }
+            ]
+          }]
+        })
+      });
+
+      const data = await response.json();
+      
+      // 如果這條路徑通了且沒報錯，立刻回傳結果
+      if (!data.error) {
+        return res.status(200).json(data);
+      }
+      
+      // 如果報錯不是 "Not Found"，代表路徑對了但內容有問題，也回傳讓前端知道
+      if (!data.error.message.includes("not found")) {
+        return res.status(200).json({ error: data.error.message });
+      }
+      
+      // 繼續嘗試下一個網址...
+    } catch (e) {
+      continue; 
     }
-
-    // 正常情況下回傳整個結果
-    res.status(200).json(data);
-  } catch (error) {
-    res.status(200).json({ error: "伺服器異常: " + error.message });
   }
+
+  res.status(200).json({ error: "嘗試了所有 API 路徑皆失敗，請確認 API Key 是否有效或 Google 伺服器狀態。" });
 }
