@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -27,13 +26,13 @@
 
         const Icon = ({ name, size = 16, className = "" }) => {
             const ref = useRef(null);
-            const iconName = name.replace(/([A-Z])/g, "-$1").toLowerCase().replace(/^-/, "");
             useEffect(() => {
                 if (window.lucide && ref.current) {
+                    const iconName = name.replace(/([A-Z])/g, "-$1").toLowerCase().replace(/^-/, "");
                     ref.current.innerHTML = `<i data-lucide="${iconName}"></i>`;
                     window.lucide.createIcons({ nameAttr: 'data-lucide', root: ref.current });
                 }
-            }, [name, size]);
+            }, [name]);
             return <span ref={ref} className={`inline-block align-middle leading-none ${className}`} style={{ width: size, height: size }}></span>;
         };
 
@@ -42,8 +41,8 @@
         const App = () => {
             const [db, setDb] = useState([]);
             const [age, setAge] = useState('32');
-            const [currency, setCurrency] = useState('TWD');
             const [rows, setRows] = useState([{ id: generateId(), code: '', term: '', premium: '' }]);
+            const [currency, setCurrency] = useState('TWD');
             const [showImportModal, setShowImportModal] = useState(false);
             const [importText, setImportText] = useState('');
             const [isAiProcessing, setIsAiProcessing] = useState(false);
@@ -58,19 +57,28 @@
             const calculateRowResult = (row) => {
                 let input = (row.code || '').trim().toUpperCase();
                 if (!input) return { valid: false, availableTerms: [] };
+                
                 let cleanCode = input;
                 let detectedTerm = row.term;
                 const prefixMatch = input.match(/^(6|10|15|20|30)([A-Z]+.*)$/);
-                if (prefixMatch) { detectedTerm = detectedTerm || prefixMatch[1]; cleanCode = prefixMatch[2]; }
+                if (prefixMatch) {
+                    detectedTerm = detectedTerm || prefixMatch[1];
+                    cleanCode = prefixMatch[2];
+                }
+
                 let matched = db.filter(r => r.code === cleanCode || (r.alias && r.alias.includes(cleanCode)));
                 if (matched.length === 0) matched = db.filter(r => r.code === input || (r.alias && r.alias.includes(input)));
+                
                 const availableTerms = [...new Set(matched.map(m => String(m.term)))].sort((a, b) => parseInt(a) - parseInt(b));
                 const finalTerm = detectedTerm || row.term;
                 const rate = matched.find(r => String(r.term) === String(finalTerm) && parseInt(age) >= r.minAge && parseInt(age) <= r.maxAge);
+
                 if (!rate) return { valid: false, availableTerms, matchedCode: matched[0]?.code };
+
                 const p = parseFloat(row.premium) || 0;
                 const fyc = p * (rate.fycRate / 100);
                 const marketing = p * (rate.marketingRate / 100);
+                
                 const weight = (function(cat, t){
                     const tv = parseInt(t);
                     if (['PA', 'HI', 'LTC', 'CA', 'TOPIC'].includes(cat)) return (tv === 2) ? 0.6 : 3.0;
@@ -80,7 +88,8 @@
                     }
                     return 1.0;
                 })(rate.cat, rate.term);
-                return { valid: true, fyc, marketing, bonus: fyc * 0.1, weightedValue: p * weight, matchedCode: rate.code, availableTerms, roi: p > 0 ? ((fyc + marketing + (fyc * 0.1)) / p * 100).toFixed(1) : 0 };
+
+                return { valid: true, fyc, marketing, bonus: fyc * 0.1, weightedValue: p * weight };
             };
 
             const totals = useMemo(() => rows.reduce((acc, r) => {
@@ -91,8 +100,9 @@
                     v: acc.v + (res.valid ? res.weightedValue : 0),
                     fyc: acc.fyc + (res.valid ? res.fyc : 0)
                 };
-            }, { total: 0, premium: 0, v: 0, fyc: 0 }), [rows, age, db, currency]);
+            }, { total: 0, premium: 0, v: 0, fyc: 0 }), [rows, age, db]);
 
+            // 文字與圖片導入核心邏輯
             const handleImageUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -107,65 +117,82 @@
                             body: JSON.stringify({ imageData: reader.result.split(',')[1] })
                         });
                         const data = await response.json();
-                        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                        // 修正讀取路徑：支援多種 Gemini API 回傳格式
+                        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || data.text || "";
                         const jsonMatch = rawText.match(/\[[\s\S]*\]/);
                         if (jsonMatch) {
                             const parsed = JSON.parse(jsonMatch[0]);
-                            setRows(parsed.map(item => ({ id: generateId(), code: String(item.code || '').toUpperCase(), term: String(item.term || ''), premium: String(item.premium || '').replace(/,/g, '') })));
+                            setRows(parsed.map(item => ({
+                                id: generateId(),
+                                code: String(item.code || '').toUpperCase(),
+                                term: String(item.term || ''),
+                                premium: String(item.premium || '').replace(/,/g, '')
+                            })));
                             setShowImportModal(false);
                         }
-                    } catch (err) { alert("辨識失敗"); } finally { setIsAiProcessing(false); }
+                    } catch (err) { alert("辨識失敗，請確認網路或 API Key"); } finally { setIsAiProcessing(false); }
                 };
             };
 
             const handleTextImport = () => {
                 const newRows = [];
-                importText.split('\n').forEach(line => {
-                    const match = line.match(/([A-Z0-9]+)\s+(\d+Y|\d+)\s+([\d,]+)/i);
-                    if (match) newRows.push({ id: generateId(), code: match[1].toUpperCase(), term: match[2].replace('Y', ''), premium: match[3].replace(/,/g, '') });
+                // 更強大的解析規則：適配南山建議書貼上的文字格式
+                const lines = importText.split('\n');
+                lines.forEach(line => {
+                    // 匹配格式如: 20STCB 20年期 5,220 或 20STCB 20 5220
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length >= 3) {
+                        const code = parts[0].toUpperCase();
+                        const term = parts[1].replace(/[^0-9]/g, '');
+                        const premium = parts[parts.length-1].replace(/[^0-9]/g, '');
+                        if (code && term && premium) {
+                            newRows.push({ id: generateId(), code, term, premium });
+                        }
+                    }
                 });
-                if (newRows.length) { setRows(newRows); setShowImportModal(false); setImportText(''); }
+                if (newRows.length > 0) { setRows(newRows); setShowImportModal(false); setImportText(''); }
+                else { alert("找不到可辨識的險種格式"); }
             };
 
             const groupedDb = useMemo(() => {
-                const groups = { 'LIFE': '利變型壽險', 'FIXED': '固定型壽險', 'PA': '意外傷害險', 'HI': '住院醫療險', 'CA': '重大傷病險', 'LTC': '長期照顧險', 'INVEST': '投資/年金', 'TOPIC': '其他/專案' };
-                return Object.entries(groups).map(([key, label]) => ({ label, items: db.filter(item => item.cat === key) }));
+                const groups = { 'LIFE': '利變型壽險', 'FIXED': '固定型壽險', 'PA': '意外傷害險', 'HI': '住院醫療險', 'CA': '重大傷病險', 'LTC': '長期照顧險', 'INVEST': '投資/年金', 'TOPIC': '專案/其他' };
+                return Object.entries(groups).map(([key, label]) => ({
+                    label,
+                    items: db.filter(item => item.cat === key)
+                }));
             }, [db]);
 
             return (
                 <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-medium pb-20">
                     <div className="max-w-6xl mx-auto space-y-8">
-                        {/* Header */}
+                        {/* Header 與原本版本一致 */}
                         <div className="flex justify-between items-center">
                             <div className="flex items-center gap-4">
                                 <div className="bg-indigo-600 p-4 rounded-3xl text-white shadow-lg"><Icon name="Zap" size={32} /></div>
-                                <div><h1 className="text-3xl font-black tracking-tight">業績計算機</h1><p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">南山人壽 前豐區專屬</p></div>
+                                <div><h1 className="text-3xl font-black">業績計算機</h1><p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">南山人壽 前豐區專屬</p></div>
                             </div>
                             <div className="flex gap-3">
-                                <div className="bg-white p-1 rounded-2xl shadow-sm border border-slate-100 flex items-center">
-                                    <button onClick={() => setCurrency('TWD')} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${currency === 'TWD' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>台幣</button>
-                                    <button onClick={() => setCurrency('USD')} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${currency === 'USD' ? 'bg-amber-500 text-white shadow-md' : 'text-slate-400'}`}>美元</button>
-                                </div>
-                                <div className="bg-white px-6 py-3 rounded-full shadow-sm border flex items-center gap-3">
+                                <button onClick={() => setCurrency(currency === 'TWD' ? 'USD' : 'TWD')} className="bg-white px-4 py-2 rounded-full shadow-sm border text-[10px] font-bold text-indigo-600 uppercase tracking-widest">{currency} 模式</button>
+                                <div className="bg-white px-4 py-2 rounded-full shadow-sm border flex items-center gap-2">
                                     <span className="text-[10px] font-bold text-slate-300 uppercase">年齡</span>
-                                    <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-xl font-black text-indigo-600 bg-transparent outline-none text-center" />
+                                    <input type="number" value={age} onChange={e => setAge(e.target.value)} className="w-8 text-sm font-black text-indigo-600 bg-transparent outline-none text-center" />
                                 </div>
                             </div>
                         </div>
 
-                        {/* 計算區 */}
+                        {/* 計算與儀表板區 */}
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
                             <div className="lg:col-span-7 space-y-4">
                                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
                                     <div className="flex justify-between items-center mb-6 px-2">
-                                        <h2 className="font-bold flex items-center gap-2 text-slate-700">商品清單</h2>
-                                        <button onClick={() => setShowImportModal(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full hover:bg-indigo-100 transition-all">智慧導入</button>
+                                        <h2 className="font-bold text-slate-700">商品清單</h2>
+                                        <button onClick={() => setShowImportModal(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full">智慧導入</button>
                                     </div>
                                     <div className="space-y-4">
                                         {rows.map(row => {
                                             const res = calculateRowResult(row);
                                             return (
-                                                <div key={row.id} className={`p-4 rounded-[1.5rem] border-2 transition-all ${res.valid ? 'bg-indigo-50/20 border-indigo-100 shadow-sm' : 'border-slate-100'}`}>
+                                                <div key={row.id} className={`p-4 rounded-[1.5rem] border-2 transition-all ${res.valid ? 'bg-indigo-50/20 border-indigo-100' : 'border-slate-100'}`}>
                                                     <div className="grid grid-cols-12 gap-3 items-center">
                                                         <input type="text" placeholder="代碼" value={row.code} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, code: e.target.value} : r))} className="col-span-4 p-2.5 bg-white rounded-xl font-bold text-sm outline-none uppercase shadow-inner" />
                                                         <select value={row.term} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, term: e.target.value} : r))} className="col-span-3 p-2.5 bg-white rounded-xl font-bold text-sm outline-none shadow-inner">
@@ -173,72 +200,67 @@
                                                             {res.availableTerms?.map(t => <option key={t} value={t}>{t}Y</option>)}
                                                         </select>
                                                         <input type="number" placeholder="保費" value={row.premium} onChange={e => setRows(rows.map(r => r.id === row.id ? {...r, premium: e.target.value} : r))} className="col-span-4 p-2.5 bg-white rounded-xl font-bold text-sm outline-none shadow-inner" />
-                                                        <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-400 transition-colors"><Icon name="Trash2" size={18} /></button>
+                                                        <button onClick={() => setRows(rows.filter(r => r.id !== row.id))} className="col-span-1 text-slate-200 hover:text-rose-400"><Icon name="Trash2" size={18} /></button>
                                                     </div>
                                                 </div>
                                             );
                                         })}
-                                        <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-[1.5rem] text-slate-300 font-bold hover:border-indigo-200 hover:text-indigo-400 transition-all">+ 新增項目</button>
+                                        <button onClick={() => setRows([...rows, {id: generateId(), code: '', term: '', premium: ''}])} className="w-full py-4 border-2 border-dashed rounded-[1.5rem] text-slate-300 font-bold hover:border-indigo-200">+ 新增險種</button>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* 儀表板 */}
-                            <div className="lg:col-span-5 space-y-6 text-white font-black">
-                                <div className="bg-slate-900 rounded-[3rem] p-10 shadow-2xl relative overflow-hidden">
-                                    <p className="text-indigo-400 text-[10px] uppercase tracking-widest mb-4">預估總收益 (含獎勵金)</p>
-                                    <div className="text-7xl mb-8">${Math.round(totals.total).toLocaleString()}</div>
+                            <div className="lg:col-span-5 space-y-6">
+                                <div className="bg-slate-900 rounded-[3rem] p-10 text-white shadow-2xl">
+                                    <p className="text-indigo-400 text-[10px] font-bold uppercase tracking-widest mb-4">預估總收益 (含獎勵金)</p>
+                                    <div className="text-7xl font-black mb-8">${Math.round(totals.total).toLocaleString()}</div>
                                     <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-8">
-                                        <div><p className="text-white/40 text-[9px] uppercase mb-1">純 FYC 收入</p><p className="text-2xl text-indigo-200">${Math.round(totals.fyc).toLocaleString()}</p></div>
-                                        <div className="text-right"><p className="text-white/40 text-[9px] uppercase mb-1">加權業績 (V)</p><p className="text-2xl text-emerald-300">{Math.round(totals.v).toLocaleString()}</p></div>
+                                        <div><p className="text-white/40 text-[9px] font-bold uppercase mb-1">純 FYC 收入</p><p className="text-2xl font-black text-indigo-200">${Math.round(totals.fyc).toLocaleString()}</p></div>
+                                        <div className="text-right"><p className="text-white/40 text-[9px] font-bold uppercase mb-1">加權業績 (V)</p><p className="text-2xl font-black text-emerald-300">{Math.round(totals.v).toLocaleString()}</p></div>
                                     </div>
                                 </div>
-                                <div className="bg-white p-6 rounded-[2rem] shadow-sm border flex justify-between items-center px-10 text-slate-800">
-                                    <span className="text-slate-400 text-[10px] uppercase tracking-widest">建議書總保費 ({currency})</span>
-                                    <span className="text-2xl font-black">${Math.round(totals.premium).toLocaleString()}</span>
+                                <div className="bg-white p-6 rounded-[2rem] shadow-sm border flex justify-between items-center px-10">
+                                    <span className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">總實繳保費 ({currency})</span>
+                                    <span className="text-2xl font-black text-slate-800">${Math.round(totals.premium).toLocaleString()}</span>
                                 </div>
                             </div>
                         </div>
 
                         {/* 分類商品庫 */}
                         <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-100">
-                            <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-slate-700"><Icon name="BookOpen" className="text-indigo-500" /> 商品資料庫 ({currency})</h3>
+                            <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-slate-700"><Icon name="BookOpen" className="text-indigo-500" /> 商品資料庫</h3>
                             <div className="space-y-10">
-                                {groupedDb.map(group => {
-                                    const filteredItems = group.items.filter(item => currency === 'USD' ? item.code.includes('U') : !item.code.includes('U'));
-                                    return filteredItems.length > 0 && (
-                                        <div key={group.label}>
-                                            <h4 className="text-xs font-black text-indigo-400 uppercase tracking-widest mb-4 border-l-4 border-indigo-400 pl-3">{group.label}</h4>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                                {filteredItems.map((item, idx) => (
-                                                    <div key={idx} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center border border-slate-100">
-                                                        <div><p className="font-bold text-slate-700">{item.code} <span className="text-xs text-slate-400">({item.term}Y)</span></p><p className="text-[9px] text-slate-400 font-bold uppercase">FYC: {item.fycRate}%</p></div>
-                                                        <a href={item.dmUrl} target="_blank" className="text-indigo-300 hover:text-indigo-600"><Icon name="ExternalLink" size={14} /></a>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                {groupedDb.map(group => (
+                                    <div key={group.label}>
+                                        <h4 className="text-xs font-black text-indigo-400 uppercase tracking-widest mb-4 border-l-4 border-indigo-400 pl-3">{group.label}</h4>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                            {group.items.map((item, idx) => (
+                                                <div key={idx} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center border border-slate-100">
+                                                    <div><p className="font-bold text-slate-700">{item.code} <span className="text-xs text-slate-400">({item.term}Y)</span></p></div>
+                                                    <a href={item.dmUrl} target="_blank" className="text-indigo-300 hover:text-indigo-600"><Icon name="ExternalLink" size={14} /></a>
+                                                </div>
+                                            ))}
                                         </div>
-                                    );
-                                })}
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     </div>
 
-                    {/* 導入 Modal */}
+                    {/* 導入 Modal - 恢復之前的樣式 */}
                     {showImportModal && (
-                        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
-                            <div className="bg-white rounded-[3rem] w-full max-w-lg p-10 shadow-2xl space-y-8 text-center leading-normal">
-                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">智慧導入建議書</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[3rem] w-full max-w-lg p-10 shadow-2xl space-y-8">
+                                <div className="flex justify-between items-center"><h3 className="text-2xl font-black">建議書導入</h3><button onClick={() => setShowImportModal(false)} className="text-slate-300 hover:text-slate-600"><Icon name="X" size={24} /></button></div>
                                 <div className="space-y-6">
-                                    <div className="bg-indigo-50 border-4 border-dashed border-indigo-100 p-8 rounded-[2.5rem]">
+                                    <div className="bg-indigo-50 border-4 border-dashed border-indigo-100 p-8 rounded-[2.5rem] text-center">
                                         <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="ai-upload" />
                                         <label htmlFor="ai-upload" className="block w-full py-5 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl cursor-pointer hover:bg-indigo-700 transition-all leading-none">
-                                            {isAiProcessing ? '🤖 正在辨識並載入中...' : '📷 上傳建議書截圖'}
+                                            {isAiProcessing ? '🤖 辨識中...' : '📷 上傳建議書截圖'}
                                         </label>
                                     </div>
-                                    <div className="relative"><span className="bg-white px-4 text-[10px] text-slate-300 font-bold uppercase tracking-widest relative z-10">或 貼上文字辨識</span><hr className="absolute top-1/2 w-full border-slate-100"/></div>
-                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs font-mono outline-none" placeholder="請貼上建議書保費明細文字..." value={importText} onChange={e => setImportText(e.target.value)} />
-                                    <button onClick={handleTextImport} className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl font-bold text-slate-500 hover:bg-slate-50">確認文字導入</button>
+                                    <textarea className="w-full h-32 bg-slate-50 border-2 border-slate-100 rounded-2xl p-4 text-xs font-mono outline-none" placeholder="或貼上文字: 代碼 年期 保費..." value={importText} onChange={e => setImportText(e.target.value)} />
+                                    <button onClick={handleTextImport} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg leading-none active:scale-95">開始文字辨識</button>
                                 </div>
                             </div>
                         </div>
